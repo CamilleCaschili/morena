@@ -17,7 +17,7 @@ export interface Skin {
   nom: string
   peau: number
   cheveux: number
-  coiffure: 'capuche' | 'court' | 'queue' | 'long' | 'chapeau' | 'heaume'
+  coiffure: 'capuche' | 'court' | 'queue' | 'long' | 'chapeau' | 'heaume' | 'tricorne'
   /** oreilles pointues */
   elfe?: boolean
   barbe?: { couleur: number; longue?: boolean }
@@ -25,15 +25,23 @@ export interface Skin {
   /** absente : couleur propre au joueur */
   tunique?: number
   robe?: boolean
+  /** jupe longue d'une autre couleur que le haut (qui reste `tunique`), manches évasées */
+  jupe?: number
+  ceinture?: number
   jambes: number
   bottes: number
   cape?: number
   armure?: { type: 'ecorce' | 'cuir' | 'maille'; couleur: number; mousse?: number }
-  baton?: { bois: number; cristal?: number; runes?: number }
+  /** griffes : sceptre à bagues et griffes dorées qui tiennent la pierre */
+  baton?: { bois: number; cristal?: number; runes?: number; griffes?: number }
   arme?: 'epee' | 'arc'
   pendentif?: number
   aura?: number
   chapeau?: number
+  /** tricorne : bord doré */
+  galon?: number
+  /** petit esprit lumineux qui flotte au-dessus de l'épaule gauche */
+  compagnon?: number
 }
 
 export const SKINS: Record<string, Skin> = {
@@ -56,6 +64,12 @@ export const SKINS: Record<string, Skin> = {
   mage: {
     nom: 'Mage', peau: 0xe8c0a0, cheveux: 0xe8e4dc, coiffure: 'chapeau', chapeau: 0x2f3f7f, barbe: { couleur: 0xe8e4dc, longue: true },
     tunique: 0x3a4a9a, robe: true, jambes: 0x2a2a4a, bottes: 0x2a2420, baton: { bois: 0x6b4a2e, cristal: 0x8ab8ff }, aura: 0x8ab8ff,
+  },
+  haute_elfe: {
+    // d'après la fiche d'Amania : tricorne noir galonné d'or, chemisier blanc, jupe bordeaux, sceptre à pierre orange, blob compagnon
+    nom: 'Haute elfe', peau: 0xf0d2b8, cheveux: 0xf2f0ec, coiffure: 'tricorne', elfe: true, yeux: 0x111111,
+    tunique: 0xf4f1ea, jupe: 0x7a1424, ceinture: 0x2a1e18, jambes: 0x7a1424, bottes: 0x2a1e18,
+    chapeau: 0x1c1a1c, galon: 0xd8a830, baton: { bois: 0x3a2618, cristal: 0xff8a1a, griffes: 0xd8a830 }, compagnon: 0xff8a1a,
   },
 }
 export const skinDe = (id?: string | null) => SKINS[id ?? ''] ?? SKINS.villageois
@@ -80,6 +94,7 @@ export interface Perso {
   corps: THREE.Object3D
   aura: THREE.Object3D[]
   tient: boolean
+  compagnon: { g: THREE.Group; yeux: THREE.Object3D[]; etincelles: THREE.Object3D[] } | null
   phase: number
   t: number
   skin: string
@@ -125,12 +140,23 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
     m(new THREE.BoxGeometry(0.16, 0.12, 0.26), sk.bottes, 0, -0.79, 0.04, p)
     return p
   })
-  if (sk.robe) m(new THREE.CylinderGeometry(0.2, 0.38, 1.35, 8), tunique, 0, 0.83, 0)
+  if (sk.jupe) {
+    // jupe longue jusqu'aux pieds, haut ajusté aux épaules dégagées
+    m(new THREE.CylinderGeometry(0.21, 0.42, 1.0, 8), sk.jupe, 0, 0.5, 0)
+    m(new THREE.CylinderGeometry(0.2, 0.21, 0.5, 8), tunique, 0, 1.25, 0)
+    m(new THREE.CylinderGeometry(0.235, 0.2, 0.08, 8), tunique, 0, 1.5, 0)
+    m(new THREE.BoxGeometry(0.16, 0.06, 0.02), sk.peau, 0, 1.47, 0.2)
+  } else if (sk.robe) m(new THREE.CylinderGeometry(0.2, 0.38, 1.35, 8), tunique, 0, 0.83, 0)
   else m(new THREE.CylinderGeometry(0.2, 0.3, 0.76, 8), tunique, 0, 1.15, 0)
-  m(new THREE.CylinderGeometry(0.265, 0.27, 0.07, 8), 0x6b4a2e, 0, 1.0, 0)
-  m(new THREE.BoxGeometry(0.08, 0.1, 0.03), 0xd4a83a, 0, 1.0, 0.27)
+  if (sk.ceinture) {
+    m(new THREE.CylinderGeometry(0.225, 0.23, 0.11, 8), sk.ceinture, 0, 0.97, 0)
+    m(new THREE.BoxGeometry(0.08, 0.1, 0.03), 0xd4a83a, 0, 0.98, 0.23)
+  } else {
+    m(new THREE.CylinderGeometry(0.265, 0.27, 0.07, 8), 0x6b4a2e, 0, 1.0, 0)
+    m(new THREE.BoxGeometry(0.08, 0.1, 0.03), 0xd4a83a, 0, 1.0, 0.27)
+  }
   if (sk.cape) m(new THREE.BoxGeometry(0.46, 1.0, 0.04), sk.cape, 0, 0.98, -0.25).rotation.x = 0.1
-  else if (!sk.armure && !sk.robe) m(new THREE.BoxGeometry(0.44, 0.72, 0.04), fonce(tunique, 0.6), 0, 1.12, -0.24).rotation.x = 0.12
+  else if (!sk.armure && !sk.robe && !sk.jupe) m(new THREE.BoxGeometry(0.44, 0.72, 0.04), fonce(tunique, 0.6), 0, 1.12, -0.24).rotation.x = 0.12
 
   // armure
   const a = sk.armure
@@ -163,6 +189,8 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
   const bras = [-1, 1].map(s => {
     const p = membre(s * 0.27, 1.47)
     m(new THREE.BoxGeometry(0.11, 0.56, 0.12), a?.type === 'maille' ? a.couleur : tunique, 0, -0.28, 0, p)
+    // manches de chemisier évasées au poignet
+    if (sk.jupe) m(new THREE.CylinderGeometry(0.085, 0.06, 0.16, 6), tunique, 0, -0.55, 0, p)
     m(new THREE.IcosahedronGeometry(0.06, 0), sk.peau, 0, -0.6, 0, p)
     return p
   })
@@ -175,7 +203,17 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
     m(new THREE.CylinderGeometry(0.03, 0.04, 1.75, 6), b.bois, 0, 0.12, 0, main)
     const crosse = m(new THREE.TorusGeometry(0.09, 0.025, 4, 8, Math.PI * 1.3), b.bois, 0, 1.06, 0.03, main)
     crosse.rotation.set(0, Math.PI / 2, 0.6)
-    if (b.cristal) { const c = m(new THREE.OctahedronGeometry(0.07), lueur(b.cristal), 0, 1.08, 0.03, main); c.scale.y = 1.6 }
+    if (b.griffes) {
+      // sceptre : bagues dorées et quatre griffes qui enserrent la pierre
+      crosse.visible = false
+      for (const y of [-0.55, 0.2, 0.82]) m(new THREE.CylinderGeometry(0.045, 0.045, 0.06, 6), b.griffes, 0, y, 0, main)
+      m(new THREE.CylinderGeometry(0.07, 0.04, 0.08, 6), b.griffes, 0, 0.98, 0, main)
+      for (let k = 0; k < 4; k++) {
+        const an = k * Math.PI / 2, gr = m(new THREE.BoxGeometry(0.025, 0.2, 0.025), b.griffes, Math.cos(an) * 0.07, 1.1, Math.sin(an) * 0.07, main)
+        gr.rotation.set(Math.sin(an) * 0.45, 0, -Math.cos(an) * 0.45)
+      }
+    }
+    if (b.cristal) { const c = m(new THREE.OctahedronGeometry(b.griffes ? 0.085 : 0.07), lueur(b.cristal), 0, b.griffes ? 1.14 : 1.08, b.griffes ? 0 : 0.03, main); c.scale.y = 1.6 }
     if (b.runes) for (let k = 0; k < 4; k++) m(new THREE.BoxGeometry(0.05, 0.035, 0.012), lueur(b.runes), 0, 0.55 - k * 0.1, 0.035, main)
   }
   if (sk.arme === 'epee') {
@@ -189,7 +227,9 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
 
   // tête
   m(new THREE.IcosahedronGeometry(0.16, 1), sk.peau, 0, 1.72, 0)
-  for (const s of [-1, 1]) m(new THREE.BoxGeometry(0.035, 0.035, 0.02), sk.yeux ?? 0x2a241d, s * 0.06, 1.74, 0.15)
+  // avec le visage plat (tricorne), de grands yeux noirs posés dessus
+  const plat = sk.coiffure === 'tricorne'
+  for (const s of [-1, 1]) m(new THREE.BoxGeometry(0.04, plat ? 0.07 : 0.035, 0.02), sk.yeux ?? 0x2a241d, s * 0.06, plat ? 1.72 : 1.74, plat ? 0.165 : 0.15)
   if (sk.elfe) for (const s of [-1, 1]) { const o = m(new THREE.ConeGeometry(0.035, 0.17, 4), sk.peau, s * 0.17, 1.76, -0.02); o.rotation.set(0, 0, -s * 1.15) }
   if (sk.barbe) {
     if (sk.barbe.longue) { const b = m(new THREE.ConeGeometry(0.12, 0.38, 6), sk.barbe.couleur, 0, 1.5, 0.1); b.rotation.x = Math.PI }
@@ -217,6 +257,28 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
       m(new THREE.BoxGeometry(0.3, 0.12, 0.1), sk.cheveux, 0, 1.7, -0.12)
       break
     }
+    case 'tricorne': {
+      // longs cheveux : calotte, mèches qui encadrent le visage, chevelure dans le dos
+      const h = m(new THREE.SphereGeometry(0.175, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), sk.cheveux, 0, 1.72, -0.01)
+      h.scale.set(1.05, 1.1, 1.08)
+      m(new THREE.BoxGeometry(0.3, 0.05, 0.05), sk.cheveux, 0, 1.83, 0.13)
+      for (const sx of [-1, 1]) m(new THREE.BoxGeometry(0.07, 0.42, 0.09), sk.cheveux, sx * 0.15, 1.5, 0.08)
+      m(new THREE.BoxGeometry(0.36, 0.8, 0.08), sk.cheveux, 0, 1.36, -0.17).rotation.x = 0.06
+      // tricorne : bord relevé en trois pans, galon doré
+      const c = sk.chapeau ?? 0x1c1a1c, gal = sk.galon ?? 0xd8a830
+      m(new THREE.CylinderGeometry(0.15, 0.18, 0.17, 8), c, 0, 1.87, -0.01)
+      // visage plat et clair, comme sur la fiche : bien lisible sous le bord du chapeau
+      m(new THREE.BoxGeometry(0.22, 0.19, 0.02), sk.peau, 0, 1.61, 0.15)
+      // bord triangulaire, une pointe vers l'avant ; chaque pan se relève le long d'un côté
+      m(new THREE.CylinderGeometry(0.34, 0.34, 0.02, 3), c, 0, 1.87, -0.01)
+      for (let k = 0; k < 3; k++) {
+        const pan = new THREE.Group(); pan.position.set(0, 1.87, -0.01); pan.rotation.y = Math.PI / 3 + k * Math.PI * 2 / 3; corps.add(pan)
+        // pan évasé vers l'extérieur ; ses extrémités se rejoignent en pointes
+        const pp = m(new THREE.BoxGeometry(0.5, 0.13, 0.025), c, 0, 0.06, 0.17, pan); pp.rotation.x = 0.6
+        const l = m(new THREE.BoxGeometry(0.52, 0.025, 0.035), gal, 0, 0.115, 0.215, pan); l.rotation.x = 0.6
+      }
+      break
+    }
     case 'heaume':
       m(new THREE.CylinderGeometry(0.185, 0.18, 0.3, 8), 0x9a9da2, 0, 1.73, 0)
       m(new THREE.SphereGeometry(0.185, 8, 3, 0, Math.PI * 2, 0, Math.PI / 2), 0x9a9da2, 0, 1.88, 0)
@@ -239,8 +301,27 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
     g.add(o); aura.push(o)
   }
 
+  // compagnon : petit blob lumineux avec deux yeux, et quelques étincelles
+  let compagnon: Perso['compagnon'] = null
+  if (sk.compagnon) {
+    const cg = new THREE.Group()
+    const blob = m(new THREE.IcosahedronGeometry(0.15, 1), lueur(sk.compagnon), 0, 0, 0, cg)
+    blob.scale.set(1.1, 0.95, 0.95)
+    for (const [x, y, r] of [[-0.13, -0.06, 0.06], [0.13, -0.05, 0.055], [0, 0.11, 0.06]]) m(new THREE.IcosahedronGeometry(r, 0), lueur(sk.compagnon), x, y, -0.02, cg)
+    const yeux = [-1, 1].map(sx => m(new THREE.BoxGeometry(0.035, 0.07, 0.02), 0x111111, sx * 0.05, 0.02, 0.145, cg))
+    const etincelles: THREE.Object3D[] = []
+    for (let k = 0; k < 5; k++) {
+      const e = m(new THREE.BoxGeometry(0.03, 0.03, 0.03), lueur(sk.compagnon, 0.8), 0, 0, 0, cg)
+      e.userData.k = k
+      e.castShadow = false
+      etincelles.push(e)
+    }
+    g.add(cg)
+    compagnon = { g: cg, yeux, etincelles }
+  }
+
   if (pseudo) g.add(etiquette(pseudo))
-  return { g, jambes, bras, corps, aura, tient, phase: 0, t: Math.random() * 10, skin: skinId }
+  return { g, jambes, bras, corps, aura, tient, compagnon, phase: 0, t: Math.random() * 10, skin: skinId }
 }
 
 /** Balancement des membres selon la vitesse (m/s), volutes de l'aura. */
@@ -259,6 +340,24 @@ export function animerPerso(p: Perso, dt: number, vitesse: number) {
     const ang = k * 2.4 + p.t * 0.8
     o.position.set(Math.cos(ang) * (0.35 + u * 0.15), 0.7 + u * 1.5, Math.sin(ang) * (0.35 + u * 0.15))
     o.scale.setScalar(1 - u * 0.6)
+  }
+  const c = p.compagnon
+  if (c) {
+    // flotte au-dessus de l'épaule gauche, même à l'arrêt : il ondule, se dandine, cligne des yeux,
+    // et traîne un peu en arrière quand on marche
+    const t = p.t
+    c.g.position.set(-0.45 + Math.sin(t * 0.9) * 0.05, 2.0 + Math.sin(t * 2.1) * 0.07, -0.05 - marche * 0.25 + Math.cos(t * 0.7) * 0.04)
+    c.g.rotation.set(Math.sin(t * 1.3) * 0.12 + marche * 0.2, Math.sin(t * 0.6) * 0.35, Math.sin(t * 1.7) * 0.15)
+    const sq = 1 + Math.sin(t * 4.2) * 0.05
+    c.g.scale.set(1 / sq, sq, 1 / sq)
+    const cligne = (t % 3.7) < 0.12 ? 0.15 : 1
+    for (const y of c.yeux) y.scale.y = cligne
+    for (const e of c.etincelles) {
+      const k = e.userData.k as number, u = (t * 0.5 + k / c.etincelles.length) % 1
+      const ang = k * 1.9 + t * 1.2
+      e.position.set(Math.cos(ang) * (0.2 + u * 0.08), -0.05 + u * 0.35, Math.sin(ang) * (0.2 + u * 0.08))
+      e.scale.setScalar(1 - u)
+    }
   }
 }
 
