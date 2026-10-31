@@ -359,6 +359,55 @@ export class VillageScene {
     paves.receiveShadow = true
     this.groupeBat.add(paves)
 
+    // chemins de terre vers les bâtiments hors des murs : ils longent les bords des cases (jamais à travers
+    // un bâtiment) jusqu'à la route de la porte la plus proche
+    const bord = avecEnceinte ? L : (n + 0.5) * S
+    const lignes = new Map<string, [number, number][]>()   // 'x:…' ou 'z:…' → intervalles
+    const ajouterSegment = (x1: number, z1: number, x2: number, z2: number) => {
+      const horizontal = Math.abs(z1 - z2) < 0.01
+      const k = horizontal ? 'z:' + z1.toFixed(2) : 'x:' + x1.toFixed(2)
+      const a = horizontal ? x1 : z1, b = horizontal ? x2 : z2
+      if (Math.abs(a - b) < 0.01) return
+      ;(lignes.get(k) ?? lignes.set(k, []).get(k)!).push([Math.min(a, b), Math.max(a, b)])
+    }
+    // repère de la route d'un côté : u le long des murs (route en u = S/2), w vers l'extérieur
+    const COTES = {
+      sud: { versUW: (x: number, z: number) => [x, z], versXZ: (u: number, w: number) => [u, w] },
+      nord: { versUW: (x: number, z: number) => [-x, -z], versXZ: (u: number, w: number) => [-u, -w] },
+      est: { versUW: (x: number, z: number) => [-z, x], versXZ: (u: number, w: number) => [w, -u] },
+      ouest: { versUW: (x: number, z: number) => [z, -x], versXZ: (u: number, w: number) => [-w, u] },
+    }
+    const dehors = [...parcelles.map(x => x.c), ...chantiersParcelle.map(x => x.c!)].filter(c => anneau(c) > n + 1)
+    for (const [i, j] of new Map(dehors.map(c => [cleCase(c), c])).values()) {
+      const cote = Math.abs(j) >= Math.abs(i) ? (j > 0 ? COTES.sud : COTES.nord) : (i > 0 ? COTES.est : COTES.ouest)
+      const [cu, cw] = cote.versUW(i * S, j * S)
+      // coin de la case tourné vers le village et vers la route
+      const u0 = cu > gx ? cu - gx : cu + gx, w0 = cw - gx
+      const p1 = cote.versXZ(u0, w0), p2 = cote.versXZ(gx, w0), p3 = cote.versXZ(gx, bord)
+      ajouterSegment(p1[0], p1[1], p2[0], p2[1])
+      ajouterSegment(p2[0], p2[1], p3[0], p3[1])
+    }
+    if (lignes.size) {
+      const matTerre = new THREE.MeshStandardMaterial({ color: 0x9b8763, roughness: 1 })
+      this.saisonniers.push({ m: matTerre, base: matTerre.color.getHex(), t: { hiver: [NEIGE, 0.7], automne: [0x7a5a3a, 0.2] } })
+      const LT = 1.3
+      for (const [k, ivs] of lignes) {
+        // fusion des morceaux qui se chevauchent sur une même ligne
+        ivs.sort((a, b) => a[0] - b[0])
+        const fus: [number, number][] = []
+        for (const iv of ivs) { const d = fus[fus.length - 1]; if (d && iv[0] <= d[1] + 0.01) d[1] = Math.max(d[1], iv[1]); else fus.push([...iv]) }
+        const pos = Number(k.slice(2)), horizontal = k[0] === 'z'
+        for (const [a, b] of fus) {
+          const lg = b - a + LT, m = (a + b) / 2
+          const ch = new THREE.Mesh(new THREE.PlaneGeometry(horizontal ? lg : LT, horizontal ? LT : lg), matTerre)
+          ch.rotation.x = -Math.PI / 2
+          ch.position.set(horizontal ? m : pos, 0.008, horizontal ? pos : m)
+          ch.receiveShadow = true
+          this.groupeBat.add(ch)
+        }
+      }
+    }
+
     this.R = (n + 0.5) * S
     this.entree = avecEnceinte ? gx : 0
     // les bâtiments à l'écart repoussent les collines et la forêt
