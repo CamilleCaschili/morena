@@ -20,6 +20,8 @@ async function envoyer() {
     etat.value = 'saisie'
     const m = error.message.toLowerCase()
     if (m.includes('signup') || m.includes('not allowed') || m.includes('not found')) erreur.value = 'Cette adresse ne fait pas partie du groupe. Demande au MJ de l’ajouter.'
+    // limite du service d'e-mails de Supabase, commune à tout le groupe (quelques envois par heure)
+    else if (m.includes('email rate limit')) erreur.value = 'Le site a envoyé trop d’e-mails de connexion cette heure-ci. Réessaie un peu plus tard (jusqu’à une heure).'
     else if (m.includes('rate') || m.includes('seconds')) erreur.value = 'Trop de demandes d’affilée. Patiente une minute avant de redemander un lien.'
     else erreur.value = 'L’envoi a échoué : ' + error.message
     return
