@@ -40,6 +40,9 @@ const echap = (e: KeyboardEvent) => { if (e.key === 'Escape' && pleinCss.value) 
 let scene: VillageScene | null = null
 let balade: Balade | null = null
 let monId = ''
+let presence = 0
+// fermeture de l'onglet : on prévient les autres tout de suite
+const quitter = () => balade?.partir()
 const skin = computed(() => moi()?.skin || 'villageois')
 watch(skin, s => { if (monId) scene?.setMoi(monId, s) })
 const nbAutres = ref(0)
@@ -80,17 +83,23 @@ onMounted(async () => {
     balade = rejoindreBalade(id, nom, m => scene?.majAutre(m.id, m.pseudo, m, m.skin), i => scene?.retirerAutre(i))
     scene.onBouge = p => balade?.envoyer(p, skin.value)
     monId = id
+    // signal de présence indépendant de l'affichage : le navigateur fige les animations d'une fenêtre
+    // cachée ou recouverte, mais le joueur est toujours là
+    presence = window.setInterval(() => { const p = scene?.positionBalade(); if (p) balade?.envoyer(p, skin.value) }, 2000)
   } catch (e) {
     erreur3d.value = 'La vue 3D ne peut pas s’afficher sur cet appareil (WebGL indisponible).'
     console.error(e)
   }
 })
 onMounted(() => {
+  window.addEventListener('pagehide', quitter)
   document.addEventListener('fullscreenchange', majPlein)
   document.addEventListener('webkitfullscreenchange', majPlein)
   window.addEventListener('keydown', echap)
 })
 onBeforeUnmount(() => {
+  clearInterval(presence)
+  window.removeEventListener('pagehide', quitter)
   balade?.fermer()
   scene?.dispose()
   document.removeEventListener('fullscreenchange', majPlein)

@@ -614,6 +614,11 @@ export class VillageScene {
     }
     a.cible.set(p.x, 0, p.z); a.yaw = p.yaw; a.vu = performance.now()
   }
+  /** Position du joueur s'il se promène : sert au signal de présence, envoyé même quand l'image est figée. */
+  positionBalade(): Position | null {
+    if (this.mode !== 'balade') return null
+    return { x: +this.pos.x.toFixed(2), z: +this.pos.z.toFixed(2), yaw: +this.yaw.toFixed(3) }
+  }
   retirerAutre(id: string) {
     const a = this.autres.get(id)
     if (!a) return
@@ -624,8 +629,8 @@ export class VillageScene {
   private suivreAutres(dt: number) {
     const now = performance.now()
     for (const [id, a] of this.autres) {
-      // sans nouvelles depuis 4 s : le joueur a fermé la page
-      if (now - a.vu > 4000) { this.retirerAutre(id); continue }
+      // sans nouvelles depuis 20 s : connexion perdue (un départ normal est annoncé par un message « part »)
+      if (now - a.vu > 20000) { this.retirerAutre(id); continue }
       const g = a.p.g, avant = g.position.clone()
       g.position.lerp(a.cible, Math.min(1, dt * 8))
       let d = a.yaw + Math.PI - g.rotation.y
