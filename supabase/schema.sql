@@ -141,12 +141,12 @@ begin
   begin alter publication supabase_realtime add table public.membres; exception when duplicate_object then null; end;
 end $$;
 
--- ── Balade à plusieurs (positions des personnages) ──────────────
--- Canal temps réel privé « balade » : seuls les membres peuvent l'écouter et y écrire.
--- Pense aussi à désactiver « Allow public access » dans Project Settings > Realtime.
+-- ── Canaux temps réel privés ────────────────────────────────────
+-- « morena » : mises à jour du village et du journal ; « balade » : positions des personnages.
+-- Seuls les membres peuvent les écouter. Pense aussi à désactiver « Allow public access » dans Realtime > Settings.
 drop policy if exists "balade_ecoute" on realtime.messages;
 create policy "balade_ecoute" on realtime.messages
-  for select to authenticated using (realtime.topic() = 'balade' and public.est_membre());
+  for select to authenticated using (realtime.topic() in ('balade', 'morena') and public.est_membre());
 
 drop policy if exists "balade_envoi" on realtime.messages;
 create policy "balade_envoi" on realtime.messages

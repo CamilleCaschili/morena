@@ -45,7 +45,7 @@ export async function demarrer() {
     const avant = store.session?.user.id
     store.session = session
     if (session && session.user.id !== avant) charger()
-    if (!session) { canal?.unsubscribe(); canal = null; store.village = null; store.journal = [] }
+    if (!session) { canal?.unsubscribe(); canal = null; clearInterval(secours); secours = 0; store.village = null; store.journal = [] }
   })
   if (data.session) await charger()
 }
@@ -68,9 +68,24 @@ export async function charger() {
   abonner()
 }
 
+let secours = 0
+/** Relit le village et le journal sans écran de chargement (retour sur l'onglet, temps réel coupé). */
+async function rafraichir() {
+  if (!store.session || store.enCours) return
+  const [v, j] = await Promise.all([
+    supabase.from('village').select('*').eq('id', 1).maybeSingle(),
+    supabase.from('journal').select('*').order('created_at', { ascending: false }).limit(300),
+  ])
+  const n = v.data as Village | null
+  if (n && (!store.village || n.version > store.village.version)) store.village = n
+  if (j.data) store.journal = j.data as Ligne[]
+}
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !demo) rafraichir() })
+
 function abonner() {
   if (canal) return
-  canal = supabase.channel('morena')
+  // canal privé : l'accès public au temps réel est coupé, seuls les membres peuvent l'écouter (schema.sql)
+  canal = supabase.channel('morena', { config: { private: true } })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'village' }, p => {
       const n = p.new as Village
       if (!store.village || n.version >= store.village.version) store.village = n
@@ -80,7 +95,15 @@ function abonner() {
       if (!store.journal.some(x => x.id === l.id)) store.journal.unshift(l)
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'membres' }, () => { recharger_membres() })
-    .subscribe()
+  const c = canal
+  supabase.realtime.setAuth().finally(() => c.subscribe(statut => {
+    // sans temps réel, on relit le village toutes les 10 s pour rester à jour
+    if (statut === 'SUBSCRIBED') { clearInterval(secours); secours = 0; rafraichir() }
+    else if ((statut === 'CHANNEL_ERROR' || statut === 'TIMED_OUT') && !secours) {
+      console.warn('Temps réel indisponible, relecture toutes les 10 s')
+      secours = window.setInterval(rafraichir, 10000)
+    }
+  }))
 }
 async function recharger_membres() {
   const { data } = await supabase.from('membres').select('*')

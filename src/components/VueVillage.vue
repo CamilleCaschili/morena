@@ -56,6 +56,8 @@ function choisirGraphismes() {
   scene?.setGraphismes(graphismes.value)
   niveau.value = scene?.niveauActuel ?? null
 }
+const puce = ref('')
+const logiciel = ref(false)
 const nbAutres = ref(0)
 const troisieme = ref(true)
 const erreur3d = ref('')
@@ -76,6 +78,8 @@ watch(saison, s => scene?.setSaison(s))
 onMounted(async () => {
   try {
     const { VillageScene } = await import('../three/scene')
+    const { puceGraphique, rendeLogiciel } = await import('../three/scene')
+    puce.value = puceGraphique(); logiciel.value = rendeLogiciel(puce.value)
     const auto = Number(lire('morena-niveau-auto'))
     scene = new VillageScene(hote.value!, { graphismes: graphismes.value, niveauAuto: lire('morena-niveau-auto') != null && auto >= 0 && auto <= 2 ? auto : null })
     niveau.value = scene.niveauActuel
@@ -191,6 +195,10 @@ function montrer(id: string) {
 
 <template>
   <section>
+    <p v-if="logiciel" class="banner" role="status">
+      Ton navigateur dessine la 3D sans la carte graphique ({{ puce }}) : ce sera lent quels que soient les réglages.
+      Active l'accélération matérielle du navigateur (voir l'aide du MJ) ou essaie avec Chrome.
+    </p>
     <div ref="cadre" class="scene" :class="{ balade: mode === 'balade', plein: pleinEcran, 'plein-css': pleinCss }">
       <div ref="hote" class="hote">
         <div v-if="erreur3d" class="erreur3d">{{ erreur3d }}</div>

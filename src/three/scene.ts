@@ -42,16 +42,24 @@ function lambert(m: THREE.Material): THREE.Material {
   return x
 }
 const n0 = (p: THREE.Points | null) => p ? p.geometry.drawRange.count : 0
-/** Puce graphique intégrée ou logicielle : on démarre en qualité moyenne. */
-function gpuModeste() {
+/** Nom de la puce qui dessine la 3D, tel que le navigateur le donne. */
+export function puceGraphique() {
   try {
     const gl = document.createElement('canvas').getContext('webgl')
-    if (!gl) return true
+    if (!gl) return ''
     const ext = gl.getExtension('WEBGL_debug_renderer_info')
     const nom = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''
     gl.getExtension('WEBGL_lose_context')?.loseContext()
-    return /intel|swiftshader|llvmpipe|mali|adreno|powervr|apple gpu/i.test(nom)
-  } catch { return false }
+    return nom
+  } catch { return '' }
+}
+/** 3D calculée par le processeur : l'accélération graphique du navigateur est coupée. */
+export const rendeLogiciel = (nom: string) => /swiftshader|llvmpipe|softpipe|software|basic render/i.test(nom)
+/** Puce graphique intégrée ou logicielle : on démarre plus bas. */
+function niveauDepart() {
+  const nom = puceGraphique()
+  if (rendeLogiciel(nom)) return 0
+  return /intel|mali|adreno|powervr|apple gpu/i.test(nom) ? 1 : 2
 }
 const CALQUE_CLIC = 1            // copies invisibles des bâtiments, servent seulement au clic
 const matPave = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true })
@@ -157,7 +165,7 @@ export class VillageScene {
   constructor(private conteneur: HTMLElement, opts: { graphismes?: Graphismes; niveauAuto?: number | null } = {}) {
     this.reglage = opts.graphismes ?? 'auto'
     this.niveau = this.reglage !== 'auto' ? NIVEAUX.findIndex(n => n.nom === this.reglage)
-      : opts.niveauAuto ?? (gpuModeste() ? 1 : 2)
+      : opts.niveauAuto ?? niveauDepart()
     // anticrénelage matériel seulement en qualité haute, et pas sur écran haute densité où il coûte cher pour un gain invisible
     this.renderer = new THREE.WebGLRenderer({ antialias: this.niveau === 2 && window.devicePixelRatio < 1.5, powerPreference: 'high-performance' })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
