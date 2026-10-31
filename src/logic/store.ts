@@ -21,6 +21,7 @@ export const store = reactive({
   erreur: '' as string,
   info: '' as string,
   enCours: false,           // une écriture est en cours
+  placerChantier: null as number | null,   // chantier à placer sur la carte (onglet Village)
 })
 
 export const moi = () => (demo ? store.membres.demo : store.session ? store.membres[store.session.user.id] : undefined)

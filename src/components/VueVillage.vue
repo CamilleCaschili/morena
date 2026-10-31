@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { store, demo, moi } from '../logic/store'
+import { store, demo, moi, modifier } from '../logic/store'
 import { rejoindreBalade, type Balade } from '../logic/balade'
 import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, toutesRegles, nomRegle, quantiteTxt, nbTxt, jauges } from '../logic/regles'
+import { calculerPlan, casesLibres, cleInstance, cleCase, dansEnceinte, figerPlan, type Case } from '../logic/plan'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from '../logic/calendrier'
 import { BI, CATS, RES, JAUGES, type CatKey, type JaugeKey } from '../data/catalogue'
 import type { VillageScene, Mode, Selection, Graphismes } from '../three/scene'
@@ -36,7 +37,10 @@ async function basculerPleinEcran() {
   }
 }
 const majPlein = () => { pleinEcran.value = pleinCss.value || elementPlein() === cadre.value }
-const echap = (e: KeyboardEvent) => { if (e.key === 'Escape' && pleinCss.value) { pleinCss.value = false; pleinEcran.value = false } }
+const echap = (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && deplacement.value) { finirDeplacement(); return }
+  if (e.key === 'Escape' && pleinCss.value) { pleinCss.value = false; pleinEcran.value = false }
+}
 let scene: VillageScene | null = null
 let balade: Balade | null = null
 let monId = ''
@@ -70,6 +74,44 @@ const tactile = typeof window !== 'undefined' && window.matchMedia?.('(pointer: 
 const v = computed(() => store.village!)
 const ordre = computed(() => normOrdre(v.value.etat))
 const enChantier = computed(() => chantiers(v.value.etat).map(c => c.id))
+const plan = computed(() => calculerPlan(ordre.value, v.value.etat.places, chantiers(v.value.etat)))
+const sigPlan = computed(() => JSON.stringify([plan.value.bat, plan.value.chantiers]))
+
+/* ── Déplacer un bâtiment ou un chantier : on choisit une case libre sur la carte ── */
+const deplacement = ref<{ index: number; id: string; chantier: boolean } | null>(null)
+function deplacer(s: { index: number; id: string; chantier?: boolean }) {
+  if (mode.value === 'balade') basculer('maquette')
+  deplacement.value = { index: s.index, id: s.id, chantier: !!s.chantier }
+  sel.value = null; scene?.setSelection(null)
+  scene?.setPlacement(casesLibres(plan.value, s.id), poser)
+}
+function finirDeplacement() { deplacement.value = null; scene?.setPlacement(null) }
+async function poser(c: Case) {
+  const d = deplacement.value; if (!d) return
+  finirDeplacement()
+  const nom = BI[d.id]?.nom ?? d.id
+  await modifier(e => {
+    const o = normOrdre(e), ch = chantiers(e)
+    const p = calculerPlan(o, e.places, ch)
+    if (p.occupees.has(cleCase(c)) || !casesLibres(p, d.id).some(x => cleCase(x) === cleCase(c))) return false
+    figerPlan(o, e.places ||= {}, ch)
+    if (d.chantier) {
+      const x = ch[d.index - 100000]; if (x?.id !== d.id) return false
+      x.place = c
+    } else {
+      if (o[d.index] !== d.id) return false
+      ;(e.places ||= {})[cleInstance(o, d.index)] = c
+    }
+    return [{ type: 'constr', texte: `${d.chantier ? 'Chantier déplacé' : 'Bâtiment déplacé'} : ${nom}.` }]
+  })
+}
+// un chantier lancé depuis Construire avec « choisir l'emplacement »
+watch(() => [store.placerChantier, props.actif] as const, ([k, a]) => {
+  if (k == null || !a || !scene) return
+  store.placerChantier = null
+  const id = chantiers(v.value.etat)[k]?.id
+  if (id) deplacer({ index: 100000 + k, id, chantier: true })
+})
 // la vue suit la saison du mois en cours ; on peut en regarder une autre pour essayer
 const apercu = ref<'' | Saison>('')
 const saison = computed<Saison>(() => apercu.value || saisonDe(v.value.etat.jour))
@@ -91,8 +133,9 @@ onMounted(async () => {
       survol.value = { nom, x: x - r.left, y: y - r.top }
     }
     scene.setSaison(saison.value)
-    scene.setVillage(ordre.value, v.value.etat.empl || [], enChantier.value)
+    scene.setVillage(ordre.value, v.value.etat.empl || [], plan.value)
     scene.setActif(props.actif)
+    if (store.placerChantier != null) { const k = store.placerChantier; store.placerChantier = null; const id = chantiers(v.value.etat)[k]?.id; if (id) deplacer({ index: 100000 + k, id, chantier: true }) }
     // balade à plusieurs : en démo, chaque onglet est un visiteur différent
     const id = demo ? 'demo-' + Math.random().toString(36).slice(2, 8) : (moi()?.user_id ?? 'inconnu')
     const nom = demo ? `Visiteur ${Math.floor(Math.random() * 90) + 10}` : (moi()?.pseudo || 'Joueur')
@@ -125,14 +168,17 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', echap)
 })
 
-watch(() => [ordre.value.join(','), (v.value.etat.empl || []).join(','), enChantier.value.join(',')], () => {
-  scene?.setVillage(ordre.value, v.value.etat.empl || [], enChantier.value)
+watch(() => [ordre.value.join(','), (v.value.etat.empl || []).join(','), sigPlan.value], () => {
+  scene?.setVillage(ordre.value, v.value.etat.empl || [], plan.value)
+  // le plan a changé (un autre joueur a construit) : on repropose les cases encore libres
+  if (deplacement.value) scene?.setPlacement(casesLibres(plan.value, deplacement.value.id), poser)
   if (sel.value && (sel.value.chantier ? enChantier.value[sel.value.index - 100000] : ordre.value[sel.value.index]) !== sel.value.id) { sel.value = null; scene?.setSelection(null) }
 })
 // une nuit passe à chaque nouveau mois
 watch(() => v.value.etat.jour, (n, a) => { if (a != null && n > a) scene?.jouerNuit() })
 watch(() => props.actif, a => {
   if (!a && mode.value === 'balade') basculer('maquette')
+  if (!a && deplacement.value) finirDeplacement()
   if (!a && pleinEcran.value) basculerPleinEcran()
   scene?.setActif(a)
 })
@@ -239,6 +285,10 @@ function montrer(id: string) {
       </p>
       <p v-else class="aide">Glisse ou A / E pour tourner, pince ou molette pour zoomer, touche un bâtiment pour sa fiche.</p>
 
+      <div v-if="deplacement" class="placer">
+        <span>Clique une case verte pour placer <b>{{ BI[deplacement.id]?.nom }}</b>. Les champs, mines et autres bâtiments de production ont leur place hors des murs.</span>
+        <button class="btn small" type="button" @click="finirDeplacement">Annuler</button>
+      </div>
       <div v-if="survol && !sel" class="bulle" :style="{ left: survol.x + 'px', top: survol.y + 'px' }">{{ survol.nom }}</div>
 
       <Joystick v-if="mode === 'balade' && tactile" @move="(x: number, y: number) => scene?.setJoystick(x, y)" />
@@ -256,6 +306,7 @@ function montrer(id: string) {
         <ul v-if="infos.prod.length" class="prod"><li v-for="p in infos.prod" :key="p">{{ p }}</li></ul>
         <p v-else class="muted" style="margin:0">Ne produit rien.</p>
         <div v-if="infos.texte" class="effet">{{ infos.texte }}</div>
+        <button v-if="sel && !dansEnceinte(sel.id)" class="btn small" type="button" :disabled="store.enCours" @click="deplacer(sel)">Déplacer</button>
         <div v-for="e in infos.effets" :key="e" class="effet">Effet automatique : {{ e }}</div>
       </aside>
     </div>
@@ -330,6 +381,7 @@ function montrer(id: string) {
 .aide { position: absolute; bottom: 10px; left: 10px; right: 10px; margin: 0; font-size: .85rem; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); pointer-events: none }
 .bulle { position: absolute; transform: translate(12px, -28px); background: rgba(20,24,28,.85); color: #fff; padding: 3px 8px; border-radius: 6px; font-size: .85rem; pointer-events: none; white-space: nowrap }
 .fiche { position: absolute; top: 10px; right: 10px; width: min(320px, calc(100% - 20px)); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.25) }
+.placer { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(560px, calc(100% - 20px)); background: var(--raised); border: 2px solid #e0b100; border-radius: 10px; padding: 10px 12px; display: flex; gap: 10px; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,.25); font-size: .9rem }
 .fiche-hd { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start }
 .nom { font-weight: 800; font-size: 1.05rem; line-height: 1.2 }
 .cat { font-size: .85rem }

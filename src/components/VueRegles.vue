@@ -140,6 +140,8 @@ const ajouterEffet = () => modifier((_e, r) => { (r.effets ||= []).push({ id: 'e
 
 const pas = (id: string, d: number) => modifier(e => {
   e.bat[id] = Math.max(0, (e.bat[id] || 0) + d); if (!e.bat[id]) delete e.bat[id]
+  // l'exemplaire retiré est le dernier : sa case redevient libre
+  if (d < 0 && e.places) delete e.places[`${id}:${e.bat[id] || 0}`]
   e.ordre = normOrdre(e)
   return [{ type: 'mj', texte: `${BI[id].nom} ${d > 0 ? 'ajouté' : 'retiré'} (sans coût).` }]
 })

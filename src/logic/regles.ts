@@ -4,9 +4,11 @@ import {
   type Boisson, type Grade, type Recette,
 } from '../data/economie'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from './calendrier'
+import { calculerPlan, cleCase, figerPlan, type Case } from './plan'
 
 /** Bâtiment payé dont la construction se termine au passage du cycle `fin`. */
-export interface Chantier { id: string; fin: number; cout: Partial<Record<ResKey, number>>; gisement?: string }
+/** place : case du plan où le bâtiment apparaîtra (voir plan.ts) */
+export interface Chantier { id: string; fin: number; cout: Partial<Record<ResKey, number>>; gisement?: string; place?: Case }
 /** Gisement prospecté ; une Mine construite dessus le fait produire chaque mois. */
 export interface Gisement { id: string; res: ResKey; qualite: number; mine: boolean }
 export interface Etat {
@@ -25,6 +27,8 @@ export interface Etat {
   armee?: Partial<Record<Grade, number>>
   gisements?: Gisement[]
   qualites?: Partial<Record<Boisson, number>>
+  /** case choisie pour chaque exemplaire (clé « id:n », voir cleInstance) ; les autres sont placés automatiquement */
+  places?: Record<string, Case>
   /** bonus ou malus de jauges décidés par le MJ (événements) */
   ajustJauges?: Partial<Record<JaugeKey, number>>
 }
@@ -76,12 +80,18 @@ export const gisements = (e: Etat) => e.gisements || []
 export const gisementsLibres = (e: Etat) => gisements(e).filter(g => !g.mine && !chantiers(e).some(c => c.gisement === g.id))
 
 /** Paye b et ouvre son chantier ; le bâtiment n'existe qu'une fois le chantier terminé. */
-export function lancerChantier(e: Etat, r: Regles, b: Batiment, gisement?: string): Chantier {
+export function lancerChantier(e: Etat, r: Regles, b: Batiment, gisement?: string, place?: Case): Chantier {
   const cout = effCost(e, r, b)
   for (const [k, n] of Object.entries(cout) as [ResKey, number][]) e.stocks[k] = (e.stocks[k] || 0) - n
   const c: Chantier = { id: b.id, fin: e.jour + dureeChantier(r, b.id), cout }
   if (b.req.some(g => g.includes('@gisement'))) c.gisement = gisement ?? gisementsLibres(e)[0]?.id
+  // la case est fixée dès le lancement, comme celles de tout le village : plus rien ne bouge ensuite
+  figerPlan(normOrdre(e), e.places ||= {}, chantiers(e))
+  const avant = calculerPlan(normOrdre(e), e.places, chantiers(e))
   ;(e.chantiers ||= []).push(c)
+  if (place && !avant.occupees.has(cleCase(place))) c.place = place
+  else { const p = calculerPlan(normOrdre(e), e.places, chantiers(e)).chantiers; c.place = p[p.length - 1]?.c ?? undefined }
+  if (!c.place) delete c.place
   return c
 }
 /** Ajoute au village les chantiers arrivés à terme (à appeler après avoir avancé le cycle). */
@@ -93,8 +103,10 @@ export function terminerChantiers(e: Etat, tous = false): string[] {
     e.bat[c.id] = (e.bat[c.id] || 0) + 1
     const g = gisements(e).find(x => x.id === c.gisement)
     if (g) g.mine = true
+    e.ordre = normOrdre(e)
+    // le nouvel exemplaire est le dernier de l'ordre : il garde la case de son chantier
+    if (c.place) (e.places ||= {})[`${c.id}:${e.bat[c.id] - 1}`] = c.place
   }
-  e.ordre = normOrdre(e)
   return finis.map(c => c.id)
 }
 /** Bière ou vin : tire la qualité au d20 au premier brasseur ou vignoble. Renvoie le texte pour le journal. */

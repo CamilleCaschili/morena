@@ -5,6 +5,7 @@ import { B, CATS, EMPL, RL, JAUGES, type Batiment, type CatKey, type ResKey, typ
 import { METIERS } from '../data/economie'
 import { statut, effCost, attente, previsionSaisons, emplOk, cnt, effetsDe, decrireEffet, lancerChantier, chantiers, dureeChantier, reqsDe, mainOeuvre, estDefense, metierDe, artisansLibres, gisementsLibres, tirerQualite, lancer, fmt, type Statut } from '../logic/regles'
 import { dateMin } from '../logic/calendrier'
+import { dansEnceinte } from '../logic/plan'
 
 const mode = ref<'ok' | 'bientot' | 'tous'>('ok')
 const cat = ref<'' | CatKey>('')
@@ -55,7 +56,7 @@ function carte(b: Batiment) {
   }
 }
 
-async function construire(b: Batiment) {
+async function construire(b: Batiment, choisirPlace = false) {
   confirmer.value = null
   let fin = 0
   const ok = await modifier((e, r) => {
@@ -67,6 +68,7 @@ async function construire(b: Batiment) {
     return [{ type: 'constr', texte: `Chantier lancé : ${b.nom}${g ? ` sur le gisement de ${RL[g.res].toLowerCase()} (qualité ${g.qualite})` : ''}${ec.length ? ` (−${ec.map(([k, n]) => `${n} ${RL[k].toLowerCase()}`).join(', −')})` : ', gratuit'}. Terminé en ${dateMin(c.fin)}.` + tirerQualite(e, b, lancer(20)) }]
   })
   const d = dureeChantier(v.value.regles, b.id)
+  if (ok && choisirPlace) { store.placerChantier = chantiers(v.value.etat).length - 1; return }
   if (ok) { fait.value = `Chantier lancé : ${b.nom} sera terminé en ${dateMin(fin)}, ${d > 1 ? `dans ${d} passages de mois` : 'au prochain passage de mois'}. Le chantier est visible dans l’onglet Village.`; setTimeout(() => { fait.value = '' }, 5000) }
   else if (!store.erreur) store.erreur = `${b.nom} n’est plus constructible : les stocks ont changé entre-temps.`
 }
@@ -131,6 +133,7 @@ async function construire(b: Batiment) {
                 <span>{{ c.depense ? `Dépenser ${c.depense} ?` : 'Construire gratuitement ?' }} {{ c.duree > 1 ? `Le chantier durera ${c.duree} mois.` : 'Le bâtiment sera terminé au prochain mois.' }}</span>
                 <div class="row">
                   <button class="btn primary small" type="button" :disabled="store.enCours" @click="construire(b)">Lancer le chantier</button>
+                  <button v-if="!dansEnceinte(b.id)" class="btn small" type="button" :disabled="store.enCours" @click="construire(b, true)">Lancer et choisir l’emplacement</button>
                   <button class="btn small ghost" type="button" @click="confirmer = null">Annuler</button>
                 </div>
               </div>

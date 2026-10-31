@@ -5,6 +5,7 @@ import { BI } from '../data/catalogue'
 import { construireEnceinte, demiPorte, ECHELLE, ENCEINTE, matFenetre, rayon, appliquerSaison, teinteSaison, NEIGE } from './batiments'
 import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
+import { anneau, cleCase, type Case, type Plan } from '../logic/plan'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -238,8 +239,9 @@ export class VillageScene {
   }
 
   /* ───────── Construction du village ───────── */
-  setVillage(ordre: string[], empl: string[], chantiers: string[] = []) {
-    const sig = ordre.join(',') + '|' + empl.join(',') + '|' + chantiers.join(',')
+  /** plan : case de chaque bâtiment et chantier (logic/plan.ts) */
+  setVillage(ordre: string[], empl: string[], plan: Plan) {
+    const sig = ordre.join(',') + '|' + empl.join(',') + '|' + JSON.stringify(plan.bat) + JSON.stringify(plan.chantiers)
     if (sig === this.signature) return
     const premier = this.signature === ''
     this.signature = sig
@@ -248,22 +250,20 @@ export class VillageScene {
     for (const o of [...this.groupeBat.children]) { this.groupeBat.remove(o); this.libérer(o) }
     this.cliquables = []; this.emetteurs = []; this.rotatifs = []; this.collisions = []
 
-    // les défenses (palissade, muraille, fossé, portes) forment l'enceinte ; le reste occupe les parcelles
+    // les défenses (palissade, muraille, fossé, portes) forment l'enceinte ; le reste occupe les cases du plan
     const items = ordre.map((id, i) => ({ id, i, b: BI[id] })).filter(x => x.b)
-    const parcelles = items.filter(x => !ENCEINTE.includes(x.b.shape))
+    const parcelles = plan.bat.map(x => ({ id: x.id, i: x.k, b: BI[x.id], c: x.c })).filter(x => x.b)
     const defenses = items.filter(x => ENCEINTE.includes(x.b.shape))
     const matsLot = [0x9a8463, 0x92805f].map(color => new THREE.MeshStandardMaterial({ color, roughness: 1 }))
     // un chantier occupe la parcelle où son bâtiment apparaîtra une fois terminé
-    const enChantier = chantiers.map((id, k) => ({ id, k, b: BI[id] })).filter(x => x.b)
-    const chantiersParcelle = enChantier.filter(x => !ENCEINTE.includes(x.b.shape))
-    const chantiersEnceinte = enChantier.filter(x => ENCEINTE.includes(x.b.shape))
-    const cases = this.cases(parcelles.length + chantiersParcelle.length)
-    let anneauMax = 1
-    parcelles.forEach(({ id, i, b }, k) => {
-      const c = cases[k]
-      if (!c) return
-      anneauMax = Math.max(anneauMax, Math.max(Math.abs(c.i), Math.abs(c.j)))
-      const x = c.i * S, z = c.j * S
+    const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c })).filter(x => x.b)
+    const chantiersParcelle = enChantier.filter(x => x.c)
+    const chantiersEnceinte = enChantier.filter(x => !x.c)
+    // anneauMax : bord de tout ce qui est construit, cœur et production à l'écart compris
+    let anneauMax = plan.n
+    parcelles.forEach(({ id, i, b, c }) => {
+      anneauMax = Math.max(anneauMax, anneau(c))
+      const x = c[0] * S, z = c[1] * S
       // terrain battu sous le bâtiment
       const lot = new THREE.Mesh(new THREE.PlaneGeometry(4.6 * ECHELLE, 4.6 * ECHELLE), matsLot[i % 3 === 0 ? 0 : 1])
       lot.rotation.x = -Math.PI / 2; lot.position.set(x, 0.015, z); lot.receiveShadow = true
@@ -296,15 +296,14 @@ export class VillageScene {
       this.groupeBat.add(g)
       this.cliquables.push(g)
     }
-    chantiersParcelle.forEach(({ id, k }, n) => {
-      const c = cases[parcelles.length + n]
-      anneauMax = Math.max(anneauMax, Math.max(Math.abs(c.i), Math.abs(c.j)))
-      const x = c.i * S, z = c.j * S
+    chantiersParcelle.forEach(({ id, k, c }) => {
+      anneauMax = Math.max(anneauMax, anneau(c!))
+      const x = c![0] * S, z = c![1] * S
       placerChantier(id, k, x, z, (x === 0 && z === 0) ? 0 : Math.round(Math.atan2(-x, -z) / (Math.PI / 2)) * (Math.PI / 2))
     })
 
-    // rues pavées entre les parcelles : lit de terre + pavés instanciés
-    const n = anneauMax
+    // rues pavées entre les parcelles du cœur : lit de terre + pavés instanciés
+    const n = plan.n
     const LARGEUR = 1.8, PAS = 0.42
     const matChemin = new THREE.MeshStandardMaterial({ color: 0x8c7d64, roughness: 1 })
     // terre battue des rues et des parcelles : un peu enneigée l'hiver
@@ -361,6 +360,8 @@ export class VillageScene {
 
     this.R = (n + 0.5) * S
     this.entree = avecEnceinte ? gx : 0
+    // les bâtiments à l'écart repoussent les collines et la forêt
+    const Rdehors = anneauMax > n ? (anneauMax + 0.5) * S + 3 : 0
     if (avecEnceinte) {
       const formes = new Set(defenses.map(x => x.b.shape))
       const portes = formes.has('porte'), demi = demiPorte(portes) * ECHELLE
@@ -385,11 +386,12 @@ export class VillageScene {
       }
       this.R = L + (formes.has('fosse') ? 5 : 3)
     }
-    // chantiers de défense : matériaux entreposés devant la porte sud
+    // chantiers de défense : matériaux entreposés le long de la route de la porte sud
+    const Lc = avecEnceinte ? L : this.R
     chantiersEnceinte.forEach(({ id, k }, n) => {
-      const Lc = avecEnceinte ? L : this.R
-      placerChantier(id, k, this.entree + (n % 2 ? -1 : 1) * (7 + Math.floor(n / 2) * 6), Lc + 6, 0)
+      placerChantier(id, k, this.entree + (n % 2 ? -1 : 1) * 0.42 * S, Lc + 7 + Math.floor(n / 2) * 5, 0)
     })
+    this.R = Math.max(this.R, Rdehors)
     const sc = this.soleil.shadow.camera
     sc.left = sc.bottom = -(this.R + 8); sc.right = sc.top = this.R + 8; sc.near = 1; sc.far = 300
     sc.updateProjectionMatrix()
@@ -401,6 +403,35 @@ export class VillageScene {
     this.materiaux(this.groupeBat); this.materiaux(this.groupeDecor); this.alleger()
     this.setSaison(this.saison)
     if (premier) this.cadrer()
+  }
+
+  /* ───────── Choix d'une case pour placer un bâtiment ───────── */
+  private placement: { cases: Set<string>; groupe: THREE.Group; survol: THREE.Mesh; choisir: (c: Case) => void } | null = null
+  /** cases : cases libres à proposer (null pour quitter) ; choisir est appelé au clic sur l'une d'elles */
+  setPlacement(cases: Case[] | null, choisir?: (c: Case) => void) {
+    if (this.placement) { this.scene.remove(this.placement.groupe); this.libérer(this.placement.groupe); this.placement = null }
+    this.renderer.domElement.style.cursor = ''
+    if (!cases || !choisir) return
+    const groupe = new THREE.Group()
+    const geo = new THREE.PlaneGeometry(S * 0.84, S * 0.84).rotateX(-Math.PI / 2)
+    const im = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x7fe08a, transparent: true, opacity: 0.32, depthWrite: false }), cases.length)
+    const m4 = new THREE.Matrix4()
+    cases.forEach((c, k) => im.setMatrixAt(k, m4.makeTranslation(c[0] * S, 0.06, c[1] * S)))
+    const survol = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.6, depthWrite: false }))
+    survol.visible = false
+    groupe.add(im, survol)
+    this.scene.add(groupe)
+    this.placement = { cases: new Set(cases.map(cleCase)), groupe, survol, choisir }
+  }
+  /** case libre sous le pointeur, ou null */
+  private caseVisee(x: number, y: number): Case | null {
+    if (!this.placement) return null
+    const rc = new THREE.Raycaster()
+    rc.setFromCamera(this.ndc(x, y), this.camera)
+    const p = rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3())
+    if (!p) return null
+    const c: Case = [Math.round(p.x / S), Math.round(p.z / S)]
+    return this.placement.cases.has(cleCase(c)) ? c : null
   }
 
   /* ───────── Saisons ───────── */
@@ -481,19 +512,6 @@ export class VillageScene {
       m.castShadow = l.cast; m.receiveShadow = true
       this.groupeBat.add(m)
     }
-  }
-
-  private cases(n: number) {
-    const out: { i: number; j: number }[] = []
-    let r = 0
-    while (out.length < n) {
-      const ring: { i: number; j: number; a: number }[] = []
-      for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) if (Math.max(Math.abs(i), Math.abs(j)) === r) ring.push({ i, j, a: Math.atan2(j, i) })
-      ring.sort((p, q) => p.a - q.a)
-      out.push(...ring)
-      r++
-    }
-    return out
   }
 
   private decor(empl: string[]) {
@@ -794,6 +812,13 @@ export class VillageScene {
       }
       return
     }
+    if (this.placement && e.pointerType === 'mouse') {
+      const c = this.caseVisee(e.clientX, e.clientY), sv = this.placement.survol
+      sv.visible = !!c
+      if (c) sv.position.set(c[0] * S, 0.07, c[1] * S)
+      this.renderer.domElement.style.cursor = c ? 'pointer' : 'not-allowed'
+      return
+    }
     if (e.pointerType === 'mouse' && this.onHover) {
       const now = performance.now()
       if (now - this.dernierSurvol < 70) return
@@ -808,6 +833,11 @@ export class VillageScene {
     if (!this.ptr || this.ptr.id !== e.pointerId) return
     const clic = this.ptr.bouge < 8
     this.ptr = null
+    if (clic && e.type === 'pointerup' && this.placement) {
+      const c = this.caseVisee(e.clientX, e.clientY)
+      if (c) this.placement.choisir(c)
+      return
+    }
     if (clic && e.type === 'pointerup') {
       const o = this.viser(e.clientX, e.clientY)
       this.onSelect?.(o ? { index: o.userData.index, id: o.userData.id, chantier: !!o.userData.chantier } : null)

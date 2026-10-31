@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { store, demarrer, moi, deconnexion, changerPseudo, changerSkin, exporter, demo } from './logic/store'
 import { SKINS } from './three/perso'
 import { prevision, fmt, chantiers, desTxt, nbTxt, jauges } from './logic/regles'
@@ -26,6 +26,8 @@ const menu = ref(false)
 const nouveauPseudo = ref('')
 
 onMounted(() => { demarrer() })
+// « Lancer et choisir l'emplacement » : on passe sur la carte du village
+watch(() => store.placerChantier, k => { if (k != null) choisir('village') })
 
 const v = computed(() => store.village)
 const date = computed(() => v.value ? { mois: MOIS[moisDe(v.value.etat.jour)], an: anDe(v.value.etat.jour), saison: saisonDe(v.value.etat.jour) } : null)
