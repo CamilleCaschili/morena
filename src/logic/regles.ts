@@ -4,7 +4,7 @@ import {
   type Boisson, type Grade, type Recette,
 } from '../data/economie'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from './calendrier'
-import { calculerPlan, cleCase, figerPlan, type Case } from './plan'
+import { calculerPlan, casesLibres, cleCase, figerPlan, type Case } from './plan'
 
 /** Bâtiment payé dont la construction se termine au passage du cycle `fin`. */
 /** place : case du plan où le bâtiment apparaîtra (voir plan.ts) */
@@ -80,18 +80,20 @@ export const gisements = (e: Etat) => e.gisements || []
 export const gisementsLibres = (e: Etat) => gisements(e).filter(g => !g.mine && !chantiers(e).some(c => c.gisement === g.id))
 
 /** Paye b et ouvre son chantier ; le bâtiment n'existe qu'une fois le chantier terminé. */
-export function lancerChantier(e: Etat, r: Regles, b: Batiment, gisement?: string, place?: Case): Chantier {
+/** repousses reçoit les bâtiments de production que le cœur, en grandissant, a poussés plus loin */
+export function lancerChantier(e: Etat, r: Regles, b: Batiment, gisement?: string, place?: Case, repousses: string[] = []): Chantier {
   const cout = effCost(e, r, b)
   for (const [k, n] of Object.entries(cout) as [ResKey, number][]) e.stocks[k] = (e.stocks[k] || 0) - n
   const c: Chantier = { id: b.id, fin: e.jour + dureeChantier(r, b.id), cout }
   if (b.req.some(g => g.includes('@gisement'))) c.gisement = gisement ?? gisementsLibres(e)[0]?.id
   // la case est fixée dès le lancement, comme celles de tout le village : plus rien ne bouge ensuite
-  figerPlan(normOrdre(e), e.places ||= {}, chantiers(e))
+  repousses.push(...figerPlan(normOrdre(e), e.places ||= {}, chantiers(e)))
   const avant = calculerPlan(normOrdre(e), e.places, chantiers(e))
   ;(e.chantiers ||= []).push(c)
-  if (place && !avant.occupees.has(cleCase(place))) c.place = place
+  if (place && casesLibres(avant, b.id).some(x => cleCase(x) === cleCase(place))) c.place = place
   else { const p = calculerPlan(normOrdre(e), e.places, chantiers(e)).chantiers; c.place = p[p.length - 1]?.c ?? undefined }
   if (!c.place) delete c.place
+  repousses.push(...figerPlan(normOrdre(e), e.places, chantiers(e)))
   return c
 }
 /** Ajoute au village les chantiers arrivés à terme (à appeler après avoir avancé le cycle). */
@@ -386,6 +388,9 @@ export function fabriquer(e: Etat, x: Recette, n: number): string | false {
   const liste = (o: Partial<Record<ResKey, number>>) => (Object.entries(o) as [ResKey, number][]).map(([k, q]) => `${q * n} ${RL[k].toLowerCase()}`).join(', ')
   return `Fabrication : ${liste(x.sorties)} (avec ${liste(x.entrees)}).`
 }
+
+/** « Le cœur du village s'agrandit : Champs cultivés repoussé plus loin. » */
+export const texteRepousses = (ids: string[]) => ids.length ? ` Le cœur du village s’agrandit : ${[...new Set(ids)].map(nomBat).join(', ')} ${ids.length > 1 ? 'repoussés' : 'repoussé'} plus loin.` : ''
 
 export const fmt = (n: number) => (n > 0 ? '+' : n < 0 ? '−' : '') + nbTxt(Math.abs(n))
 export const res = (k: ResKey) => RL[k].toLowerCase()

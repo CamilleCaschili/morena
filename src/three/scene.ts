@@ -5,7 +5,7 @@ import { BI } from '../data/catalogue'
 import { construireEnceinte, demiPorte, ECHELLE, ENCEINTE, matFenetre, rayon, appliquerSaison, teinteSaison, NEIGE } from './batiments'
 import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
-import { anneau, cleCase, type Case, type Plan } from '../logic/plan'
+import { anneau, cleCase, sousCase, type Case, type Plan } from '../logic/plan'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -252,54 +252,55 @@ export class VillageScene {
 
     // les défenses (palissade, muraille, fossé, portes) forment l'enceinte ; le reste occupe les cases du plan
     const items = ordre.map((id, i) => ({ id, i, b: BI[id] })).filter(x => x.b)
-    const parcelles = plan.bat.map(x => ({ id: x.id, i: x.k, b: BI[x.id], c: x.c })).filter(x => x.b)
+    const parcelles = plan.bat.map(x => ({ id: x.id, i: x.k, b: BI[x.id], c: x.c, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
     const defenses = items.filter(x => ENCEINTE.includes(x.b.shape))
     const matsLot = [0x9a8463, 0x92805f].map(color => new THREE.MeshStandardMaterial({ color, roughness: 1 }))
     // un chantier occupe la parcelle où son bâtiment apparaîtra une fois terminé
-    const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c })).filter(x => x.b)
+    const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
     const chantiersParcelle = enChantier.filter(x => x.c)
     const chantiersEnceinte = enChantier.filter(x => !x.c)
     // anneauMax : bord de tout ce qui est construit, cœur et production à l'écart compris
     let anneauMax = plan.n
-    parcelles.forEach(({ id, i, b, c }) => {
+    parcelles.forEach(({ id, i, b, c, sc }) => {
       anneauMax = Math.max(anneauMax, anneau(c))
-      const x = c[0] * S, z = c[1] * S
+      // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
+      const x = (c[0] + sc.dx) * S, z = (c[1] + sc.dz) * S, e = ECHELLE * sc.echelle
+      const theta = (c[0] === 0 && c[1] === 0) ? 0 : Math.round(Math.atan2(-c[0], -c[1]) / (Math.PI / 2)) * (Math.PI / 2)
       // terrain battu sous le bâtiment
-      const lot = new THREE.Mesh(new THREE.PlaneGeometry(4.6 * ECHELLE, 4.6 * ECHELLE), matsLot[i % 3 === 0 ? 0 : 1])
+      const lot = new THREE.Mesh(new THREE.PlaneGeometry(4.6 * e, 4.6 * e), matsLot[i % 3 === 0 ? 0 : 1])
       lot.rotation.x = -Math.PI / 2; lot.position.set(x, 0.015, z); lot.receiveShadow = true
       this.groupeBat.add(lot)
 
       const g = construireBatiment(id, i + 1)
       g.position.set(x, 0, z)
-      g.scale.setScalar(ECHELLE)
-      const theta = (x === 0 && z === 0) ? 0 : Math.round(Math.atan2(-x, -z) / (Math.PI / 2)) * (Math.PI / 2)
+      g.scale.setScalar(e)
       g.rotation.y = theta
       g.userData.index = i
       g.userData.id = id
       g.updateMatrixWorld(true)
       for (const p of g.userData.smoke as THREE.Vector3[]) this.emetteurs.push({ p: g.localToWorld(p.clone()), t: Math.random() * 2 })
       this.rotatifs.push(...(g.userData.spin as THREE.Object3D[]))
-      const r = rayon(b.shape) * ECHELLE
+      const r = rayon(b.shape) * e
       if (r) this.collisions.push({ x, z, r })
       this.groupeBat.add(g)
       this.cliquables.push(g)
     })
-    const placerChantier = (id: string, k: number, x: number, z: number, theta: number) => {
+    const placerChantier = (id: string, k: number, x: number, z: number, theta: number, echelle = 1) => {
       const g = construireChantier(id, 500 + k)
       g.position.set(x, 0, z)
-      g.scale.setScalar(ECHELLE)
+      g.scale.setScalar(ECHELLE * echelle)
       g.rotation.y = theta
       g.userData.index = INDEX_CHANTIER + k
       g.userData.id = id
       g.userData.chantier = true
-      this.collisions.push({ x, z, r: 1.4 * ECHELLE })
+      this.collisions.push({ x, z, r: 1.4 * ECHELLE * echelle })
       this.groupeBat.add(g)
       this.cliquables.push(g)
     }
-    chantiersParcelle.forEach(({ id, k, c }) => {
+    chantiersParcelle.forEach(({ id, k, c, sc }) => {
       anneauMax = Math.max(anneauMax, anneau(c!))
-      const x = c![0] * S, z = c![1] * S
-      placerChantier(id, k, x, z, (x === 0 && z === 0) ? 0 : Math.round(Math.atan2(-x, -z) / (Math.PI / 2)) * (Math.PI / 2))
+      const x = (c![0] + sc.dx) * S, z = (c![1] + sc.dz) * S
+      placerChantier(id, k, x, z, (c![0] === 0 && c![1] === 0) ? 0 : Math.round(Math.atan2(-c![0], -c![1]) / (Math.PI / 2)) * (Math.PI / 2), sc.echelle)
     })
 
     // rues pavées entre les parcelles du cœur : lit de terre + pavés instanciés

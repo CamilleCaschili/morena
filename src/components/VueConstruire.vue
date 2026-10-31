@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { store, modifier } from '../logic/store'
 import { B, CATS, EMPL, RL, JAUGES, type Batiment, type CatKey, type ResKey, type JaugeKey } from '../data/catalogue'
 import { METIERS } from '../data/economie'
-import { statut, effCost, attente, previsionSaisons, emplOk, cnt, effetsDe, decrireEffet, lancerChantier, chantiers, dureeChantier, reqsDe, mainOeuvre, estDefense, metierDe, artisansLibres, gisementsLibres, tirerQualite, lancer, fmt, type Statut } from '../logic/regles'
+import { statut, effCost, attente, previsionSaisons, emplOk, cnt, effetsDe, decrireEffet, lancerChantier, chantiers, dureeChantier, reqsDe, mainOeuvre, estDefense, metierDe, artisansLibres, gisementsLibres, tirerQualite, lancer, fmt, texteRepousses, type Statut } from '../logic/regles'
 import { dateMin } from '../logic/calendrier'
 import { dansEnceinte } from '../logic/plan'
 
@@ -61,11 +61,12 @@ async function construire(b: Batiment, choisirPlace = false) {
   let fin = 0
   const ok = await modifier((e, r) => {
     if (statut(e, r, b) !== 'ok') return false
-    const c = lancerChantier(e, r, b, choixGis.value && gisementsLibres(e).some(g => g.id === choixGis.value) ? choixGis.value : undefined)
+    const repousses: string[] = []
+    const c = lancerChantier(e, r, b, choixGis.value && gisementsLibres(e).some(g => g.id === choixGis.value) ? choixGis.value : undefined, undefined, repousses)
     fin = c.fin
     const ec = Object.entries(c.cout) as [ResKey, number][]
     const g = e.gisements?.find(x => x.id === c.gisement)
-    return [{ type: 'constr', texte: `Chantier lancé : ${b.nom}${g ? ` sur le gisement de ${RL[g.res].toLowerCase()} (qualité ${g.qualite})` : ''}${ec.length ? ` (−${ec.map(([k, n]) => `${n} ${RL[k].toLowerCase()}`).join(', −')})` : ', gratuit'}. Terminé en ${dateMin(c.fin)}.` + tirerQualite(e, b, lancer(20)) }]
+    return [{ type: 'constr', texte: `Chantier lancé : ${b.nom}${g ? ` sur le gisement de ${RL[g.res].toLowerCase()} (qualité ${g.qualite})` : ''}${ec.length ? ` (−${ec.map(([k, n]) => `${n} ${RL[k].toLowerCase()}`).join(', −')})` : ', gratuit'}. Terminé en ${dateMin(c.fin)}.` + tirerQualite(e, b, lancer(20)) + texteRepousses(repousses) }]
   })
   const d = dureeChantier(v.value.regles, b.id)
   if (ok && choisirPlace) { store.placerChantier = chantiers(v.value.etat).length - 1; return }

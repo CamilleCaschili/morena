@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { store, demo, moi, modifier } from '../logic/store'
 import { rejoindreBalade, type Balade } from '../logic/balade'
-import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, toutesRegles, nomRegle, quantiteTxt, nbTxt, jauges } from '../logic/regles'
+import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, toutesRegles, nomRegle, quantiteTxt, nbTxt, jauges, texteRepousses } from '../logic/regles'
 import { calculerPlan, casesLibres, cleInstance, cleCase, dansEnceinte, figerPlan, type Case } from '../logic/plan'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from '../logic/calendrier'
 import { BI, CATS, RES, JAUGES, type CatKey, type JaugeKey } from '../data/catalogue'
@@ -93,8 +93,8 @@ async function poser(c: Case) {
   await modifier(e => {
     const o = normOrdre(e), ch = chantiers(e)
     const p = calculerPlan(o, e.places, ch)
-    if (p.occupees.has(cleCase(c)) || !casesLibres(p, d.id).some(x => cleCase(x) === cleCase(c))) return false
-    figerPlan(o, e.places ||= {}, ch)
+    if (!casesLibres(p, d.id).some(x => cleCase(x) === cleCase(c))) return false
+    const avant = figerPlan(o, e.places ||= {}, ch)
     if (d.chantier) {
       const x = ch[d.index - 100000]; if (x?.id !== d.id) return false
       x.place = c
@@ -102,7 +102,8 @@ async function poser(c: Case) {
       if (o[d.index] !== d.id) return false
       ;(e.places ||= {})[cleInstance(o, d.index)] = c
     }
-    return [{ type: 'constr', texte: `${d.chantier ? 'Chantier déplacé' : 'Bâtiment déplacé'} : ${nom}.` }]
+    const rep = [...avant, ...figerPlan(o, e.places, ch)].filter(id => id !== d.id)
+    return [{ type: 'constr', texte: `${d.chantier ? 'Chantier déplacé' : 'Bâtiment déplacé'} : ${nom}.` + texteRepousses(rep) }]
   })
 }
 // un chantier lancé depuis Construire avec « choisir l'emplacement »
