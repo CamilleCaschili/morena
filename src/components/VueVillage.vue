@@ -196,8 +196,14 @@ function montrer(id: string) {
 <template>
   <section>
     <p v-if="logiciel" class="banner" role="status">
-      Ton navigateur dessine la 3D sans la carte graphique ({{ puce }}) : ce sera lent quels que soient les réglages.
-      Active l'accélération matérielle du navigateur (voir l'aide du MJ) ou essaie avec Chrome.
+      <template v-if="/basic render/i.test(puce)">
+        Windows n'a pas de pilote pour la carte graphique de cet ordinateur : la 3D est calculée par le processeur et sera lente quels que soient les réglages.
+        Installe le pilote graphique (Windows Update &gt; Mises à jour facultatives, ou le site d'Intel, AMD ou NVIDIA), puis redémarre.
+      </template>
+      <template v-else>
+        Ton navigateur dessine la 3D sans la carte graphique ({{ puce }}) : ce sera lent quels que soient les réglages.
+        Active l'accélération matérielle dans les paramètres du navigateur, ou essaie avec un autre navigateur.
+      </template>
     </p>
     <div ref="cadre" class="scene" :class="{ balade: mode === 'balade', plein: pleinEcran, 'plein-css': pleinCss }">
       <div ref="hote" class="hote">
