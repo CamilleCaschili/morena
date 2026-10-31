@@ -5,7 +5,7 @@ import { rejoindreBalade, type Balade } from '../logic/balade'
 import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, D100_MOYENNE } from '../logic/regles'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from '../logic/calendrier'
 import { BI, CATS, RES, type CatKey } from '../data/catalogue'
-import type { VillageScene, Mode, Selection } from '../three/scene'
+import type { VillageScene, Mode, Selection, Graphismes } from '../three/scene'
 import Joystick from './Joystick.vue'
 
 const props = defineProps<{ actif: boolean }>()
@@ -45,6 +45,17 @@ let presence = 0
 const quitter = () => balade?.partir()
 const skin = computed(() => moi()?.skin || 'villageois')
 watch(skin, s => { if (monId) scene?.setMoi(monId, s) })
+// graphismes : choix du joueur et dernier niveau trouvé par le mode auto, propres à cet appareil
+const lire = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
+const ecrire = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* rien */ } }
+const NOMS_NIVEAU = ['basse', 'moyenne', 'haute']
+const graphismes = ref<Graphismes>((['auto', 'haute', 'moyenne', 'basse'] as const).find(g => g === lire('morena-graphismes')) ?? 'auto')
+const niveau = ref<number | null>(null)
+function choisirGraphismes() {
+  ecrire('morena-graphismes', graphismes.value)
+  scene?.setGraphismes(graphismes.value)
+  niveau.value = scene?.niveauActuel ?? null
+}
 const nbAutres = ref(0)
 const troisieme = ref(true)
 const erreur3d = ref('')
@@ -65,7 +76,10 @@ watch(saison, s => scene?.setSaison(s))
 onMounted(async () => {
   try {
     const { VillageScene } = await import('../three/scene')
-    scene = new VillageScene(hote.value!)
+    const auto = Number(lire('morena-niveau-auto'))
+    scene = new VillageScene(hote.value!, { graphismes: graphismes.value, niveauAuto: lire('morena-niveau-auto') != null && auto >= 0 && auto <= 2 ? auto : null })
+    niveau.value = scene.niveauActuel
+    scene.onNiveau = n => { niveau.value = n; ecrire('morena-niveau-auto', String(n)) }
     scene.onSelect = s => { sel.value = s; scene?.setSelection(s?.index ?? null) }
     scene.onHover = (nom, x, y) => {
       if (!nom) { survol.value = null; return }
@@ -190,6 +204,12 @@ function montrer(id: string) {
         <select id="v-saison" v-model="apercu" class="saison" aria-label="Saison affichée">
           <option value="">Saison du mois ({{ SAISONS[saisonDe(v.etat.jour)] }})</option>
           <option v-for="sa in ORDRE_SAISONS" :key="sa" :value="sa">Aperçu : {{ SAISONS[sa] }}</option>
+        </select>
+        <select id="v-graphismes" v-model="graphismes" class="saison" aria-label="Qualité des graphismes" @change="choisirGraphismes">
+          <option value="auto">Graphismes auto{{ niveau != null ? ` (${NOMS_NIVEAU[niveau]})` : '' }}</option>
+          <option value="haute">Graphismes : haute</option>
+          <option value="moyenne">Graphismes : moyenne</option>
+          <option value="basse">Graphismes : basse</option>
         </select>
         <button class="btn small" type="button" @click="basculerNuit">{{ nuit ? 'Voir de jour' : 'Voir de nuit' }}</button>
         <button class="btn small" type="button" :aria-pressed="pleinEcran" @click="basculerPleinEcran">{{ pleinEcran ? 'Quitter le plein écran' : 'Plein écran' }}</button>

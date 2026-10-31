@@ -17,7 +17,26 @@ const INDEX_CHANTIER = 100000
 
 const S = 5.4 * ECHELLE       // écart entre deux emplacements
 const HAUTEUR_YEUX = 1.7
-const BUDGET_PIXELS = 4_000_000   // au-delà (grand écran haute densité), l'image est légèrement agrandie
+/* Niveaux de graphismes. budget : pixels dessinés au plus (au-delà l'image est légèrement agrandie) ;
+   ombres : taille de la carte d'ombres (0 = sans ombres) et intervalle entre deux mises à jour. */
+export type Graphismes = 'auto' | 'haute' | 'moyenne' | 'basse'
+export const NIVEAUX = [
+  { nom: 'basse', ombres: 0, tOmbre: 0, budget: 1_100_000, dpr: 1, min: 0.6, flocons: 500 },
+  { nom: 'moyenne', ombres: 1024, tOmbre: 0.3, budget: 2_000_000, dpr: 1.25, min: 0.7, flocons: 1000 },
+  { nom: 'haute', ombres: 2048, tOmbre: 0.12, budget: 4_000_000, dpr: 2, min: 0.75, flocons: 1800 },
+] as const
+const n0 = (p: THREE.Points | null) => p ? p.geometry.drawRange.count : 0
+/** Puce graphique intégrée ou logicielle : on démarre en qualité moyenne. */
+function gpuModeste() {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl')
+    if (!gl) return true
+    const ext = gl.getExtension('WEBGL_debug_renderer_info')
+    const nom = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return /intel|swiftshader|llvmpipe|mali|adreno|powervr|apple gpu/i.test(nom)
+  } catch { return false }
+}
 const CALQUE_CLIC = 1            // copies invisibles des bâtiments, servent seulement au clic
 const matPave = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true })
 matPave.userData.partage = true
@@ -113,9 +132,18 @@ export class VillageScene {
   private ptr: { id: number; x: number; y: number; bouge: number } | null = null
   private dernierSurvol = 0
 
-  constructor(private conteneur: HTMLElement) {
-    // sur écran haute densité, l'anticrénelage matériel coûte cher pour un gain invisible
-    this.renderer = new THREE.WebGLRenderer({ antialias: window.devicePixelRatio < 1.5, powerPreference: 'high-performance' })
+  /** réglage choisi, et niveau réellement appliqué (0 basse … 2 haute) */
+  private reglage: Graphismes = 'auto'
+  private niveau = 2
+  /** prévient quand le mode auto change de niveau (pour l'afficher et s'en souvenir) */
+  onNiveau?: (niveau: number) => void
+
+  constructor(private conteneur: HTMLElement, opts: { graphismes?: Graphismes; niveauAuto?: number | null } = {}) {
+    this.reglage = opts.graphismes ?? 'auto'
+    this.niveau = this.reglage !== 'auto' ? NIVEAUX.findIndex(n => n.nom === this.reglage)
+      : opts.niveauAuto ?? (gpuModeste() ? 1 : 2)
+    // anticrénelage matériel seulement en qualité haute, et pas sur écran haute densité où il coûte cher pour un gain invisible
+    this.renderer = new THREE.WebGLRenderer({ antialias: this.niveau === 2 && window.devicePixelRatio < 1.5, powerPreference: 'high-performance' })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -181,6 +209,7 @@ export class VillageScene {
     window.addEventListener('blur', this.razTouches)
 
     this.creerNeige()
+    this.appliquerNiveau()
     this.boucle()
   }
 
@@ -391,7 +420,7 @@ export class VillageScene {
     const centre = this.mode === 'balade' ? this.pos : this.controls.target
     n.position.set(centre.x, 0, centre.z)
     const a = n.geometry.attributes.position as THREE.BufferAttribute
-    for (let i = 0; i < a.count; i++) {
+    for (let i = 0, n = Math.min(a.count, n0(this.neige)); i < n; i++) {
       let y = a.getY(i) - dt * (2 + (i % 5) * 0.35)
       if (y < 0) y += 40
       a.setY(i, y)
@@ -776,7 +805,8 @@ export class VillageScene {
   private redim() {
     const w = this.conteneur.clientWidth || 1, h = this.conteneur.clientHeight || 1
     // plafond de pixels dessinés (plein écran sur écran haute densité), puis réglage selon la fluidité
-    const ratio = Math.min(window.devicePixelRatio, 2, Math.sqrt(BUDGET_PIXELS / (w * h))) * this.qualite
+    const n = NIVEAUX[this.niveau]
+    const ratio = Math.min(window.devicePixelRatio, n.dpr, Math.sqrt(n.budget / (w * h))) * this.qualite
     this.renderer.setPixelRatio(Math.max(0.5, ratio))
     this.renderer.setSize(w, h)
     this.renderer.shadowMap.needsUpdate = true
@@ -786,20 +816,60 @@ export class VillageScene {
 
   private actif = true
   /** Met la scène en pause quand l'onglet Village n'est pas affiché. */
-  setActif(a: boolean) { this.actif = a; if (a) { this.horloge.getDelta(); this.mesure = { t: 0, n: 0, bons: 0 }; this.redim() } }
+  setActif(a: boolean) { this.actif = a; if (a) { this.horloge.getDelta(); this.mesure = { t: 0, n: 0, bons: 0 }; this.debut = performance.now(); this.redim() } }
 
   /* Résolution adaptative : baisse si les images mettent trop de temps, remonte quand c'est fluide. */
   private qualite = 1
   private mesure = { t: 0, n: 0, bons: 0 }
   private tOmbre = 0
+  private lents = 0
+  private debut = performance.now()
   private ajusterQualite(brut: number) {
+    // les premières secondes (construction du village, compilation) ne reflètent pas la fluidité
+    if (performance.now() - this.debut < 4000) return
     const m = this.mesure
     m.t += brut; m.n++
     if (m.t < 1) return
     const ms = m.t / m.n * 1000
     m.t = 0; m.n = 0
-    if (ms > 28 && this.qualite > 0.75) { this.qualite = Math.max(0.75, this.qualite * 0.88); m.bons = 0; this.redim() }
+    const min = NIVEAUX[this.niveau].min
+    if (ms > 28 && this.qualite > min) { this.qualite = Math.max(min, this.qualite * 0.88); m.bons = 0; this.lents = 0; this.redim() }
     else if (ms < 18 && this.qualite < 1 && ++m.bons >= 3) { this.qualite = Math.min(1, this.qualite * 1.15); m.bons = 0; this.redim() }
+    // en auto : si c'est encore lent à la résolution minimale pendant 3 s, on passe au niveau inférieur
+    else if (ms > 30 && this.reglage === 'auto' && this.niveau > 0 && ++this.lents >= 3) {
+      this.lents = 0
+      this.niveau--
+      this.qualite = 1
+      this.appliquerNiveau()
+      this.onNiveau?.(this.niveau)
+    }
+  }
+
+  get niveauActuel() { return this.niveau }
+  setGraphismes(g: Graphismes) {
+    this.reglage = g
+    this.niveau = g === 'auto' ? this.niveau : NIVEAUX.findIndex(n => n.nom === g)
+    this.qualite = 1; this.lents = 0
+    this.appliquerNiveau()
+  }
+  private appliquerNiveau() {
+    const n = NIVEAUX[this.niveau]
+    const ombres = n.ombres > 0
+    if (this.renderer.shadowMap.enabled !== ombres) {
+      this.renderer.shadowMap.enabled = ombres
+      // les matériaux doivent être recompilés avec ou sans ombres
+      this.scene.traverse(o => { const m = (o as THREE.Mesh).material; if (m) for (const x of Array.isArray(m) ? m : [m]) x.needsUpdate = true })
+    }
+    this.soleil.castShadow = ombres
+    this.renderer.shadowMap.type = this.niveau === 2 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap
+    if (ombres && this.soleil.shadow.mapSize.x !== n.ombres) {
+      this.soleil.shadow.map?.dispose()
+      this.soleil.shadow.map = null as unknown as THREE.WebGLRenderTarget
+      this.soleil.shadow.mapSize.set(n.ombres, n.ombres)
+    }
+    if (this.neige) this.neige.geometry.setDrawRange(0, n.flocons)
+    this.mesure = { t: 0, n: 0, bons: 0 }
+    this.redim()
   }
 
   private boucle = () => {
@@ -848,7 +918,7 @@ export class VillageScene {
       this.anneau.scale.set(s, s, s)
     }
     this.tOmbre += dt
-    if (this.tOmbre > 0.12) { this.tOmbre = 0; this.renderer.shadowMap.needsUpdate = true }
+    if (this.renderer.shadowMap.enabled && this.tOmbre > NIVEAUX[this.niveau].tOmbre) { this.tOmbre = 0; this.renderer.shadowMap.needsUpdate = true }
     this.renderer.render(this.scene, this.camera)
   }
 
