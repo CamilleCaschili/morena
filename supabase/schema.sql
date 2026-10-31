@@ -62,7 +62,7 @@ end $$;
 
 -- ── Le village ──────────────────────────────────────────────────
 -- etat   : jour (numéro du mois, 1 = janvier an 1), stocks, chantiers, bâtiments, ordre de construction, villageois…
--- regles : production quotidienne et effets spéciaux (modifiables par le MJ seulement)
+-- regles : production mensuelle, effets spéciaux, prix et artisans (modifiables par le MJ seulement)
 create table if not exists public.village (
   id         int primary key default 1 check (id = 1),
   etat       jsonb not null,
@@ -156,29 +156,47 @@ create policy "balade_envoi" on realtime.messages
 insert into public.village (id, etat, regles) values (1,
 '{
   "jour": 1,
-  "stocks": {"nourriture": 299, "metal": 47, "bois": 14, "pierre": 4, "pt": 0, "tissu": 14, "charbon": 122, "fer": 64, "vin": 0},
+  "stocks": {"or": 0, "nourriture": 299, "metal": 47, "bois": 14, "pierre": 4, "pt": 0, "tissu": 14, "charbon": 122, "fer": 64, "vin": 0},
   "bat": {"puits": 1, "champs": 1, "elevage": 1, "tissage": 1, "chasseurs": 1, "bucherons": 1, "charbonniere": 1, "forge": 1, "carriere": 1, "auberge": 1, "mine_fer": 1},
   "ordre": ["puits", "champs", "auberge", "forge", "bucherons", "carriere", "mine_fer", "chasseurs", "elevage", "tissage", "charbonniere"],
   "villageois": null,
   "mo": null,
   "empl": ["M", "F"],
-  "chantiers": []
+  "chantiers": [],
+  "artisans": {},
+  "armee": {},
+  "gisements": []
 }'::jsonb,
 '{
   "regles": [
-    {"id": "r1",  "bat": "champs",       "res": "nourriture", "sens": 1,  "mode": "de",   "n": 1, "pause": ["hiver"]},
-    {"id": "r2",  "bat": "chasseurs",    "res": "nourriture", "sens": 1,  "mode": "de",   "n": 1},
-    {"id": "r3",  "bat": "bucherons",    "res": "bois",       "sens": 1,  "mode": "de",   "n": 1},
-    {"id": "r4",  "bat": "charbonniere", "res": "charbon",    "sens": 1,  "mode": "de",   "n": 1},
-    {"id": "r5",  "bat": "mine_fer",     "res": "fer",        "sens": 1,  "mode": "de",   "n": 1},
-    {"id": "r6",  "bat": "tissage",      "res": "tissu",      "sens": 1,  "mode": "fixe", "n": 20},
-    {"id": "r7",  "bat": "forge",        "res": "metal",      "sens": 1,  "mode": "fixe", "n": 20},
-    {"id": "r8",  "bat": "forge",        "res": "fer",        "sens": -1, "mode": "fixe", "n": 20},
-    {"id": "r9",  "bat": "carriere",     "res": "pierre",     "sens": 1,  "mode": "de",   "n": 1},
-    {"id": "r10", "bat": "auberge",      "res": "nourriture", "sens": -1, "mode": "fixe", "n": null}
+    {"id": "t_champs", "bat": "champs", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 100, "pause": ["hiver"]},
+    {"id": "t_verger", "bat": "verger", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 100, "pause": ["hiver"]},
+    {"id": "t_elevage", "bat": "elevage", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_chasseurs", "bat": "chasseurs", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_fromagerie", "bat": "fromagerie", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 20},
+    {"id": "t_cuisines", "bat": "cuisines", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 20},
+    {"id": "t_auberge", "bat": "auberge", "res": "nourriture", "sens": 1, "mode": "de", "n": 2, "faces": 20},
+    {"id": "t_boulangerie", "bat": "boulangerie", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 20},
+    {"id": "t_boucher", "bat": "boucher", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 20},
+    {"id": "t_cuisines_chateau", "bat": "cuisines_chateau", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_brasseur", "bat": "brasseur", "res": "biere", "sens": 1, "mode": "de", "n": 1, "faces": 20, "pause": ["hiver"]},
+    {"id": "t_brasseur_n", "bat": "brasseur", "res": "nourriture", "sens": 1, "mode": "de", "n": 1, "faces": 20, "pause": ["hiver"]},
+    {"id": "t_vignoble", "bat": "vignoble", "res": "vin", "sens": 1, "mode": "de", "n": 1, "faces": 20, "pause": ["hiver"]},
+    {"id": "t_moulin", "bat": "moulin", "res": "nourriture", "sens": 1, "mode": "fixe", "n": 1},
+    {"id": "t_moulin_eau", "bat": "moulin_eau", "res": "nourriture", "sens": 1, "mode": "fixe", "n": 2},
+    {"id": "t_caserne", "bat": "caserne", "res": "nourriture", "sens": -1, "mode": "fixe", "n": 1},
+    {"id": "t_peage", "bat": "peage", "res": "or", "sens": 1, "mode": "fixe", "n": 2},
+    {"id": "t_bucherons", "bat": "bucherons", "res": "bois", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_scierie_ind", "bat": "scierie_ind", "res": "bois", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_carriere", "bat": "carriere", "res": "pierre", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_carriere_ind", "bat": "carriere_ind", "res": "pierre", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_charbonniere", "bat": "charbonniere", "res": "charbon", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_mine_fer", "bat": "mine_fer", "res": "fer", "sens": 1, "mode": "de", "n": 1, "faces": 100},
+    {"id": "t_tissage", "bat": "tissage", "res": "tissu", "sens": 1, "mode": "fixe", "n": 20}
   ],
   "effets": [
-    {"id": "e1", "bat": "scierie", "type": "cout", "sens": -1, "val": 10, "unit": "fixe", "res": "bois", "cible": "tous", "note": ""}
+    {"id": "t_scierie", "bat": "scierie", "type": "cout", "sens": -1, "val": 10, "unit": "palier", "res": "bois", "cible": "tous", "note": ""},
+    {"id": "t_maconnerie", "bat": "maconnerie", "type": "cout", "sens": -1, "val": 10, "unit": "palier", "res": "pierre", "cible": "tous", "note": ""}
   ]
 }'::jsonb)
 on conflict (id) do nothing;

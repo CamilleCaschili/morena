@@ -2,19 +2,20 @@
 import { ref, computed, onMounted } from 'vue'
 import { store, demarrer, moi, deconnexion, changerPseudo, changerSkin, exporter, demo } from './logic/store'
 import { SKINS } from './three/perso'
-import { prevision, fmt, chantiers } from './logic/regles'
+import { prevision, fmt, chantiers, desTxt, nbTxt, jauges } from './logic/regles'
 import { MOIS, moisDe, anDe, saisonDe, SAISONS } from './logic/calendrier'
-import { RES } from './data/catalogue'
+import { RES, JAUGES, type JaugeKey } from './data/catalogue'
 import Connexion from './components/Connexion.vue'
 import VueVillage from './components/VueVillage.vue'
 import VueConstruire from './components/VueConstruire.vue'
 import VueJournal from './components/VueJournal.vue'
+import VueEconomie from './components/VueEconomie.vue'
 import VueRegles from './components/VueRegles.vue'
 import DialogueJour from './components/DialogueJour.vue'
 
-type Onglet = 'village' | 'construire' | 'journal' | 'regles'
+type Onglet = 'village' | 'construire' | 'economie' | 'journal' | 'regles'
 const ONGLETS: { k: Onglet; l: string }[] = [
-  { k: 'village', l: 'Village' }, { k: 'construire', l: 'Construire' }, { k: 'journal', l: 'Journal' }, { k: 'regles', l: 'Règles' },
+  { k: 'village', l: 'Village' }, { k: 'construire', l: 'Construire' }, { k: 'economie', l: 'Économie' }, { k: 'journal', l: 'Journal' }, { k: 'regles', l: 'Règles' },
 ]
 const lu = (() => { try { return localStorage.getItem('morena-onglet') as Onglet | null } catch { return null } })()
 const onglet = ref<Onglet>(lu && ONGLETS.some(o => o.k === lu) ? lu : 'village')
@@ -32,15 +33,19 @@ const nbChantiers = computed(() => v.value ? chantiers(v.value.etat).length : 0)
 const fc = computed(() => v.value ? prevision(v.value.etat, v.value.regles) : null)
 const stocks = computed(() => {
   if (!v.value || !fc.value) return []
+  // les ressources de base sont toujours affichées, les autres dès qu'il y en a ou qu'elles bougent
   return RES.map(r => {
     const f = fc.value![r.k]
     const parts: { t: string; c: string }[] = []
     if (f.fixe) parts.push({ t: fmt(f.fixe), c: f.fixe > 0 ? 'p' : 'm' })
-    if (f.des) parts.push({ t: `+${f.des}d100`, c: 'p' })
+    const d = desTxt(f.des)
+    if (d) parts.push({ t: '+' + d, c: 'p' })
     if (f.undef) parts.push({ t: '?', c: 'm' })
-    return { k: r.k, l: r.l, v: v.value!.etat.stocks[r.k] || 0, parts }
-  })
+    const n = v.value!.etat.stocks[r.k] || 0
+    return { k: r.k, l: r.l, v: nbTxt(n), parts, voir: r.g === 'base' || n !== 0 || parts.length > 0 }
+  }).filter(s => s.voir)
 })
+const jg = computed(() => v.value ? jauges(v.value.etat) : null)
 
 function ouvrirMenu() { nouveauPseudo.value = moi()?.pseudo ?? ''; menu.value = !menu.value }
 async function enregistrerPseudo() { if (nouveauPseudo.value.trim()) await changerPseudo(nouveauPseudo.value); menu.value = false }
@@ -70,6 +75,7 @@ function telecharger() {
           <div class="jour">
             <template v-if="date"><b>{{ date.mois }}</b> an {{ date.an }} <span class="saison" :class="date.saison">{{ SAISONS[date.saison] }}</span></template>
             <template v-else>–</template>
+            <span v-for="(l, k) in JAUGES" :key="k" class="jauge" :title="jg?.[k as JaugeKey].detail.join('\n') || 'Aucun bâtiment n’y contribue'">{{ l }} <b>{{ jg?.[k as JaugeKey].total ?? 0 }}</b></span>
             <span v-if="nbChantiers" class="nb-chantiers">{{ nbChantiers }} chantier{{ nbChantiers > 1 ? 's' : '' }}</span>
           </div>
           <div class="espace"></div>
@@ -115,6 +121,7 @@ function telecharger() {
         <template v-else>
           <VueVillage v-show="onglet === 'village'" :actif="onglet === 'village'" />
           <VueConstruire v-if="onglet === 'construire'" />
+          <VueEconomie v-if="onglet === 'economie'" />
           <VueJournal v-if="onglet === 'journal'" />
           <VueRegles v-if="onglet === 'regles'" />
         </template>
@@ -137,6 +144,8 @@ h1 { font-family: var(--f-display); font-weight: 400; font-size: 2rem; line-heig
 .saison.ete { background: #f8e7b0; color: #7a5a06 }
 .saison.automne { background: #f4d2b5; color: #8a3c0e }
 .saison.hiver { background: #dbe7f3; color: #2c4f75 }
+.jauge { align-self: center; font-size: .78rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); cursor: help }
+.jauge b { color: var(--fg) }
 .nb-chantiers { align-self: center; font-size: .78rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px dashed var(--line) }
 .espace { flex: 1 }
 .profil { position: relative }

@@ -2,9 +2,9 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { store, demo, moi } from '../logic/store'
 import { rejoindreBalade, type Balade } from '../logic/balade'
-import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, D100_MOYENNE } from '../logic/regles'
+import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, toutesRegles, nomRegle, quantiteTxt, nbTxt, jauges } from '../logic/regles'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from '../logic/calendrier'
-import { BI, CATS, RES, type CatKey } from '../data/catalogue'
+import { BI, CATS, RES, JAUGES, type CatKey, type JaugeKey } from '../data/catalogue'
 import type { VillageScene, Mode, Selection, Graphismes } from '../three/scene'
 import Joystick from './Joystick.vue'
 
@@ -152,22 +152,24 @@ const infos = computed(() => {
     chantier: c ? `En construction : terminé en ${dateMin(c.fin)}, au prochain passage de mois.` : '',
     prod: decrireProduction(v.value.regles, bat.value.id),
     effets: effetsDe(v.value.regles, bat.value.id).map(decrireEffet),
+    texte: bat.value.effet,
     nb: cnt(v.value.etat, bat.value.id),
   }
 })
 
 const fc = computed(() => prevision(v.value.etat, v.value.regles))
-const lignesProd = computed(() => RES.map(r => {
-  const items = (v.value.regles.regles || []).filter(x => x.res === r.k && cnt(v.value.etat, x.bat) > 0)
-  const det = items.map(x => {
-    const c = cnt(v.value.etat, x.bat)
-    const q = x.n == null ? 'à préciser' : x.mode === 'de' ? `${x.sens > 0 ? '+' : '−'}${c * x.n}d100` : `${x.sens > 0 ? '+' : '−'}${c * x.n}`
-    const arret = actif(x, v.value.etat.jour) ? '' : ` (à l’arrêt en ${SAISONS[saisonDe(v.value.etat.jour)].toLowerCase()})`
-    return `${BI[x.bat]?.nom ?? x.bat}${c > 1 ? ' ×' + c : ''} : ${q}${arret}`
-  })
-  if (r.k === 'nourriture' && v.value.etat.villageois) det.push(`Villageois : −${v.value.etat.villageois}`)
-  return { k: r.k, l: r.l, det, moy: Math.round(fc.value[r.k].attendu) }
-}).filter(x => x.det.length))
+const lignesProd = computed(() => {
+  const toutes = toutesRegles(v.value.etat, v.value.regles)
+  return RES.map(r => {
+    const det = toutes.filter(x => x.regle.res === r.k).map(({ regle: x, nb: c }) => {
+      const arret = actif(x, v.value.etat.jour) ? '' : ` (à l’arrêt en ${SAISONS[saisonDe(v.value.etat.jour)].toLowerCase()})`
+      return `${nomRegle(x)}${c > 1 ? ' ×' + c : ''} : ${quantiteTxt(x, c)}${arret}`
+    })
+    if (r.k === 'nourriture' && v.value.etat.villageois) det.push(`Villageois : −${v.value.etat.villageois}`)
+    return { k: r.k, l: r.l, det, moy: nbTxt(Math.round(fc.value[r.k].attendu * 10) / 10), pos: fc.value[r.k].attendu > 0 }
+  }).filter(x => x.det.length)
+})
+const jg = computed(() => jauges(v.value.etat))
 
 const parCat = computed(() => {
   const m: Partial<Record<CatKey, { id: string; nom: string; n: number }[]>> = {}
@@ -253,7 +255,8 @@ function montrer(id: string) {
         <p v-if="infos.chantier" style="margin:0">{{ infos.chantier }}</p>
         <ul v-if="infos.prod.length" class="prod"><li v-for="p in infos.prod" :key="p">{{ p }}</li></ul>
         <p v-else class="muted" style="margin:0">Ne produit rien.</p>
-        <div v-for="e in infos.effets" :key="e" class="effet">Effet : {{ e }}</div>
+        <div v-if="infos.texte" class="effet">{{ infos.texte }}</div>
+        <div v-for="e in infos.effets" :key="e" class="effet">Effet automatique : {{ e }}</div>
       </aside>
     </div>
 
@@ -267,13 +270,23 @@ function montrer(id: string) {
               <tr v-for="l in lignesProd" :key="l.k">
                 <td><b>{{ l.l }}</b></td>
                 <td class="muted"><div v-for="d in l.det" :key="d">{{ d }}</div></td>
-                <td class="r num">{{ l.moy > 0 ? '+' : '' }}{{ l.moy }}</td>
+                <td class="r num">{{ l.pos ? '+' : '' }}{{ l.moy }}</td>
               </tr>
             </tbody>
           </table>
-          <p class="muted petit">La moyenne compte {{ String(D100_MOYENNE).replace('.', ',') }} par d100.</p>
+          <p class="muted petit">La moyenne d’un dé est la moitié de ses faces plus ½ : 50,5 pour un d100, 10,5 pour un d20.</p>
         </div>
         <p v-else class="muted">Aucune production pour l'instant.</p>
+        <h2>Jauges du village</h2>
+        <div class="tablewrap">
+          <table><tbody>
+            <tr v-for="(l, k) in JAUGES" :key="k">
+              <td><b>{{ l }}</b></td>
+              <td class="muted"><div v-for="d in jg[k as JaugeKey].detail" :key="d">{{ d }}</div><div v-if="!jg[k as JaugeKey].detail.length">Aucun bâtiment n’y contribue.</div></td>
+              <td class="r num"><b>{{ jg[k as JaugeKey].total }}</b></td>
+            </tr>
+          </tbody></table>
+        </div>
       </section>
       <section>
         <h2>Bâtiments construits</h2>

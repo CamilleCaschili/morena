@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { store, modifier, estMj } from '../logic/store'
-import { B, BI, CATS, EMPL, EMPL_CHOICES, RES, RL, type CatKey, type ResKey } from '../data/catalogue'
-import { cnt, normOrdre, decrireEffet, chantiers, dureeChantier, DUREE_CHANTIER, terminerChantiers, libelleChantier, type Regle, type Effet } from '../logic/regles'
+import { B, BI, CATS, EMPL, EMPL_CHOICES, RES, RL, GROUPES_RES, JAUGES, nomBat, type CatKey, type ResKey, type GroupeRes, type JaugeKey } from '../data/catalogue'
+import { METIERS, MILITAIRES, GRADES, PRIX, PRIX_QUALITE, REGLES_TABLEUR, EFFETS_TABLEUR, type Grade, type Boisson } from '../data/economie'
+import { cnt, normOrdre, decrireEffet, chantiers, dureeChantier, DUREE_CHANTIER, terminerChantiers, libelleChantier, batDuMetier, prixDe, nbTxt, arrondi, type Regle, type Effet } from '../logic/regles'
 import { MOIS, SAISONS, ORDRE_SAISONS, moisDe, anDe, cycleDe, dateDe, type Saison } from '../logic/calendrier'
 
 const v = computed(() => store.village!)
@@ -61,16 +62,65 @@ const annulerChantier = (i: number) => modifier(e => {
   for (const [k, n] of Object.entries(c.cout)) e.stocks[k] = (e.stocks[k] || 0) + (n as number)
   return [{ type: 'mj', texte: `Chantier annulé et remboursé : ${BI[c.id]?.nom ?? c.id}.` }]
 })
-const setStock = (k: ResKey, s: string) => modifier(e => { const n = nb(s) || 0, o = e.stocks[k] || 0; if (n === o) return false; e.stocks[k] = n; return [{ type: 'mj', texte: `${RL[k]} corrigé : ${o} → ${n}.` }] })
+// l'or se compte au centième (0,5 PO pour un villageois)
+const setStock = (k: ResKey, s: string) => modifier(e => {
+  const n = k === 'or' ? arrondi(Math.max(0, Number(s.replace(',', '.')) || 0)) : nb(s) || 0, o = e.stocks[k] || 0
+  if (n === o) return false
+  e.stocks[k] = n
+  return [{ type: 'mj', texte: `${RL[k]} corrigé : ${nbTxt(o)} → ${nbTxt(n)}.` }]
+})
+const groupesRes = (Object.keys(GROUPES_RES) as GroupeRes[]).map(g => ({ g, l: GROUPES_RES[g], items: RES.filter(r => r.g === g) }))
 const setVill = (s: string) => modifier(e => { e.villageois = nb(s); return [{ type: 'mj', texte: `Villageois : ${e.villageois ?? 'inconnu'}.` }] })
-const setMo = (s: string) => modifier(e => { e.mo = nb(s); return [] })
+const setArtisan = (m: string, s: string) => modifier(e => {
+  const n = nb(s) || 0, o = e.artisans?.[m] || 0; if (n === o) return false
+  ;(e.artisans ||= {})[m] = n
+  return [{ type: 'mj', texte: `Artisans (${METIERS[m].nom.toLowerCase()}) : ${o} → ${n}.` }]
+})
+const setArmee = (g: Grade, s: string) => modifier(e => {
+  const n = nb(s) || 0, o = e.armee?.[g] || 0; if (n === o) return false
+  ;(e.armee ||= {})[g] = n
+  return [{ type: 'mj', texte: `${MILITAIRES[g].nom}s : ${o} → ${n}.` }]
+})
+const setJauge = (k: JaugeKey, s: string) => modifier(e => {
+  const n = Math.round(Number(s) || 0), o = e.ajustJauges?.[k] || 0; if (n === o) return false
+  ;(e.ajustJauges ||= {})[k] = n
+  return [{ type: 'mj', texte: `${JAUGES[k]} : ajustement ${o} → ${n}.` }]
+})
+const setQualite = (k: Boisson, s: string) => modifier(e => {
+  const q = nb(s); (e.qualites ||= {})
+  if (q) e.qualites[k] = Math.min(4, Math.max(1, q)); else delete e.qualites[k]
+  return [{ type: 'mj', texte: `Qualité ${k === 'biere' ? 'de la bière' : 'du vin'} : ${q ? 'niveau ' + e.qualites[k] : 'pas encore tirée'}.` }]
+})
+/** '' : retour au prix du tableur, '-' : pas d'échange */
+const setPrix = (k: ResKey, s: string) => modifier((e, r) => {
+  const o = prixDe(e, r, k)
+  const t = s.trim().replace(',', '.')
+  if (t === '') { if (!r.prix || !(k in r.prix)) return false; delete r.prix[k] }
+  else (r.prix ||= {})[k] = t === '-' ? null : arrondi(Math.max(0, Number(t) || 0))
+  const n = prixDe(e, r, k)
+  return [{ type: 'mj', texte: `Prix ${RL[k].toLowerCase()} : ${o == null ? 'aucun' : nbTxt(o) + ' PO'} → ${n == null ? 'aucun' : nbTxt(n) + ' PO'}.` }]
+})
+const prixTableur = (k: ResKey) => k === 'biere' || k === 'vin' ? `selon la qualité (${PRIX_QUALITE.map(nbTxt).join(' / ')})` : PRIX[k] == null ? 'aucun' : nbTxt(PRIX[k]!) + ' PO'
+const setMetier = (m: string, id: string) => modifier((_e, r) => {
+  const o = batDuMetier(r, m); if (o === id) return false
+  if (id === METIERS[m].bat) { if (r.metiers) delete r.metiers[m] } else (r.metiers ||= {})[m] = id
+  return [{ type: 'mj', texte: `${METIERS[m].nom} : demandé par ${id ? nomBat(id) : 'aucun bâtiment'}.` }]
+})
+
+// remplace la production et les effets par ceux du tableur du MJ
+const confirmerTableur = ref(false)
+const appliquerTableur = () => modifier((_e, r) => {
+  r.regles = JSON.parse(JSON.stringify(REGLES_TABLEUR))
+  r.effets = JSON.parse(JSON.stringify(EFFETS_TABLEUR))
+  return [{ type: 'mj', texte: 'Production et effets remplacés par ceux du tableur du MJ.' }]
+}).then(() => { confirmerTableur.value = false })
 const setEmpl = (k: string, on: boolean) => modifier(e => { e.empl = (e.empl || []).filter(x => x !== k); if (on) e.empl.push(k); return [{ type: 'mj', texte: `Emplacement « ${EMPL[k as keyof typeof EMPL]} » ${on ? 'ajouté' : 'retiré'}.` }] })
 
 function majRegle(id: string, champ: keyof Regle, brut: string) {
   return modifier((_e, r) => {
     const g = r.regles.find(x => x.id === id); if (!g) return false
     const x = g as unknown as Record<string, unknown>
-    x[champ] = champ === 'sens' ? Number(brut) : champ === 'n' ? nb(brut) : brut
+    x[champ] = champ === 'sens' ? Number(brut) : champ === 'n' ? nb(brut) : champ === 'faces' ? Math.max(2, nb(brut) || 100) : brut
     return [{ type: 'mj', texte: `Règle modifiée : ${BI[g.bat]?.nom ?? g.bat}, ${RL[g.res]}.` }]
   })
 }
@@ -106,19 +156,51 @@ const pas = (id: string, d: number) => modifier(e => {
       <div class="grille">
         <label class="field">Mois<select id="r-mois" :value="moisDe(v.etat.jour)" @change="setMois(val($event))"><option v-for="(m, i) in MOIS" :key="m" :value="i">{{ m }}</option></select></label>
         <label class="field">Année<input id="r-an" type="number" min="1" :value="anDe(v.etat.jour)" @change="setAn(val($event))"></label>
-        <label v-for="r in RES" :key="r.k" class="field">{{ r.l }}<input :id="'r-st-' + r.k" type="number" min="0" :value="v.etat.stocks[r.k] || 0" @change="setStock(r.k, val($event))"></label>
       </div>
+      <template v-for="gr in groupesRes" :key="gr.g">
+        <h4>{{ gr.l }}</h4>
+        <div class="grille">
+          <label v-for="r in gr.items" :key="r.k" class="field">{{ r.l }}<input :id="'r-st-' + r.k" type="number" min="0" :step="r.k === 'or' ? 0.01 : 1" :value="v.etat.stocks[r.k] || 0" @change="setStock(r.k, val($event))"></label>
+        </div>
+      </template>
 
       <h3>Population</h3>
       <div class="grille">
         <label class="field">Villageois (−1 nourriture chacun par mois)<input id="r-vill" type="number" min="0" placeholder="Inconnu" :value="v.etat.villageois ?? ''" @change="setVill(val($event))"></label>
-        <label class="field">Main-d'œuvre disponible<input id="r-mo" type="number" min="0" placeholder="Pas encore gérée" :value="v.etat.mo ?? ''" @change="setMo(val($event))"></label>
       </div>
+      <p class="muted petit">Artisans compris. La main-d’œuvre libre se calcule : villageois − artisans − postes des bâtiments (voir l’onglet Économie). Tant que le nombre est vide, elle n’est pas vérifiée.</p>
+      <h4>Artisans</h4>
+      <div class="grille">
+        <label v-for="(m, k) in METIERS" :key="k" class="field">{{ m.nom }}<input :id="'r-art-' + k" type="number" min="0" :value="v.etat.artisans?.[k] || 0" @change="setArtisan(String(k), val($event))"></label>
+      </div>
+      <h4>Armée</h4>
+      <div class="grille">
+        <label v-for="g in GRADES" :key="g" class="field">{{ MILITAIRES[g].nom }}s<input :id="'r-arm-' + g" type="number" min="0" :value="v.etat.armee?.[g] || 0" @change="setArmee(g, val($event))"></label>
+      </div>
+
+      <h3>Jauges et boissons</h3>
+      <p class="muted petit">Les jauges se calculent avec les bâtiments construits (chaque exemplaire compte). Ajoute ici les bonus ou malus des événements.</p>
+      <div class="grille">
+        <label v-for="(l, k) in JAUGES" :key="k" class="field">{{ l }} (ajustement)<input :id="'r-jg-' + k" type="number" :value="v.etat.ajustJauges?.[k] || 0" @change="setJauge(k as JaugeKey, val($event))"></label>
+        <label v-for="k in (['biere', 'vin'] as Boisson[])" :key="k" class="field">Qualité {{ k === 'biere' ? 'de la bière' : 'du vin' }} (1 à 4)<input :id="'r-q-' + k" type="number" min="1" max="4" placeholder="Pas tirée" :value="v.etat.qualites?.[k] ?? ''" @change="setQualite(k, val($event))"></label>
+      </div>
+      <p class="muted petit">La qualité se tire au d20 à la construction du premier brasseur ou vignoble (1-5 : 1, 6-10 : 2, 11-15 : 3, 16-20 : 4).</p>
 
       <h3>Emplacements du village</h3>
       <div class="checks">
         <label v-for="k in EMPL_CHOICES" :key="k"><input :id="'r-empl-' + k" type="checkbox" :checked="(v.etat.empl || []).includes(k)" @change="setEmpl(k, ($event.target as HTMLInputElement).checked)"> {{ EMPL[k] }}</label>
       </div>
+
+      <h3>Règles du tableur</h3>
+      <p class="muted petit">Remplace la production mensuelle et les effets ci-dessous par ceux du tableur du MJ (dés 1d100, 1d20, 2d20, champs, verger, vignoble et brasseur à l’arrêt l’hiver, scierie et maçonnerie…). Le reste du village ne change pas.</p>
+      <div v-if="confirmerTableur" class="confirm">
+        <span>Remplacer les {{ v.regles.regles.length }} règles de production et les {{ (v.regles.effets || []).length }} effets actuels ?</span>
+        <div class="row">
+          <button class="btn primary small" type="button" @click="appliquerTableur">Remplacer</button>
+          <button class="btn small ghost" type="button" @click="confirmerTableur = false">Annuler</button>
+        </div>
+      </div>
+      <button v-else class="btn small" type="button" @click="confirmerTableur = true">Appliquer les règles du tableur</button>
 
       <h3>Production et consommation mensuelles</h3>
       <p class="muted petit">« À l'arrêt » : la règle ne s'applique pas pendant les saisons cochées (par exemple les champs enneigés l'hiver).</p>
@@ -130,8 +212,8 @@ const pas = (id: string, d: number) => modifier(e => {
               <td><select :id="'rb-' + g.id" :value="g.bat" @change="majRegle(g.id, 'bat', val($event))"><optgroup v-for="gr in groupes" :key="gr.c" :label="gr.l"><option v-for="b in gr.items" :key="b.id" :value="b.id">{{ b.nom }}</option></optgroup></select></td>
               <td><select :id="'rr-' + g.id" :value="g.res" @change="majRegle(g.id, 'res', val($event))"><option v-for="r in RES" :key="r.k" :value="r.k">{{ r.l }}</option></select></td>
               <td><select :id="'rs-' + g.id" :value="String(g.sens)" @change="majRegle(g.id, 'sens', val($event))"><option value="1">Produit</option><option value="-1">Consomme</option></select></td>
-              <td><select :id="'rm-' + g.id" :value="g.mode" @change="majRegle(g.id, 'mode', val($event))"><option value="fixe">Fixe</option><option value="de">Dés d100</option></select></td>
-              <td class="qte"><input :id="'rn-' + g.id" type="number" min="0" placeholder="?" :value="g.n ?? ''" @change="majRegle(g.id, 'n', val($event))"> <span v-if="g.mode === 'de'" class="muted">dé(s)</span> <span v-if="g.n == null" class="flag">à préciser</span></td>
+              <td><select :id="'rm-' + g.id" :value="g.mode" @change="majRegle(g.id, 'mode', val($event))"><option value="fixe">Fixe</option><option value="de">Dés</option></select></td>
+              <td class="qte"><input :id="'rn-' + g.id" type="number" min="0" placeholder="?" :value="g.n ?? ''" @change="majRegle(g.id, 'n', val($event))"> <template v-if="g.mode === 'de'"><span class="muted">d</span><input :id="'rf-' + g.id" type="number" min="2" class="court" :value="g.faces || 100" @change="majRegle(g.id, 'faces', val($event))"></template> <span v-if="g.n == null" class="flag">à préciser</span></td>
               <td><span class="saisons" role="group" :aria-label="'Saisons à l’arrêt pour ' + (BI[g.bat]?.nom ?? g.bat)">
                 <button v-for="sa in ORDRE_SAISONS" :key="sa" type="button" :class="sa" :aria-pressed="!!g.pause?.includes(sa)" :title="SAISONS[sa]" @click="basculerPause(g.id, sa)">{{ SAISONS[sa] }}</button>
               </span></td>
@@ -155,7 +237,7 @@ const pas = (id: string, d: number) => modifier(e => {
                 <td class="nowrap">
                   <select :id="'es-' + f.id" class="auto" :value="String(f.sens)" @change="majEffet(f.id, 'sens', val($event))"><option value="-1">−</option><option value="1">+</option></select>
                   <input :id="'ev-' + f.id" type="number" min="0" placeholder="?" class="court" :value="f.val ?? ''" @change="majEffet(f.id, 'val', val($event))">
-                  <select :id="'eu-' + f.id" class="auto" :value="f.unit" @change="majEffet(f.id, 'unit', val($event))"><option value="fixe">unités</option><option value="%">%</option></select>
+                  <select :id="'eu-' + f.id" class="auto" :value="f.unit" @change="majEffet(f.id, 'unit', val($event))"><option value="fixe">unités</option><option value="%">%</option><option value="palier">unités (moitié si coût ≤)</option></select>
                 </td>
                 <td><select :id="'er-' + f.id" :value="f.res" @change="majEffet(f.id, 'res', val($event))"><option v-for="r in RES" :key="r.k" :value="r.k">{{ r.l }}</option></select></td>
                 <td>
@@ -175,6 +257,36 @@ const pas = (id: string, d: number) => modifier(e => {
       </div>
       <p v-if="!(v.regles.effets || []).length" class="muted petit">Aucun effet pour l'instant.</p>
       <button class="btn small ajout" type="button" @click="ajouterEffet">Ajouter un effet</button>
+
+      <h3>Prix du marché</h3>
+      <p class="muted petit">En pièces d’or, pour l’achat comme la vente. Laisse vide pour reprendre le prix du tableur ; mets « - » pour interdire l’échange.</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Ressource</th><th>Tableur</th><th>Prix utilisé</th></tr></thead>
+          <tbody>
+            <tr v-for="r in RES.filter(x => x.k !== 'or')" :key="r.k">
+              <td>{{ r.l }}</td>
+              <td class="muted">{{ prixTableur(r.k) }}</td>
+              <td class="qte"><input :id="'rp-' + r.k" type="text" inputmode="decimal" :placeholder="prixDe(v.etat, v.regles, r.k) == null ? 'aucun' : nbTxt(prixDe(v.etat, v.regles, r.k)!)"
+                :value="v.regles.prix && r.k in v.regles.prix ? (v.regles.prix[r.k] == null ? '-' : nbTxt(v.regles.prix[r.k]!)) : ''" @change="setPrix(r.k, val($event))"> <span class="muted">PO</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Artisans demandés</h3>
+      <p class="muted petit">Bâtiment qui ne peut se construire qu’avec un artisan libre de ce métier (à adapter au besoin).</p>
+      <div class="tablewrap">
+        <table><tbody>
+          <tr v-for="(m, k) in METIERS" :key="k">
+            <td>{{ m.nom }}</td>
+            <td><select :id="'rmt-' + k" :value="batDuMetier(v.regles, String(k))" @change="setMetier(String(k), val($event))">
+              <option value="">Aucun bâtiment</option>
+              <optgroup v-for="gr in groupes" :key="gr.c" :label="gr.l"><option v-for="b in gr.items.filter(x => x.cost)" :key="b.id" :value="b.id">{{ b.nom }}</option></optgroup>
+            </select></td>
+          </tr>
+        </tbody></table>
+      </div>
 
       <h3>Durée des chantiers</h3>
       <p class="muted petit">Par défaut, tout chantier dure {{ DUREE_CHANTIER }} mois. Ajoute ici les bâtiments plus longs à construire ; les chantiers déjà lancés gardent leur date de fin.</p>
@@ -248,6 +360,9 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0 }
 .saisons button.ete[aria-pressed="true"] { background: #b8860b }
 .saisons button.automne[aria-pressed="true"] { background: #b5531c }
 .saisons button.hiver[aria-pressed="true"] { background: #3f6e9e }
+h4 { margin: 12px 0 6px; font-size: .85rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted) }
+.confirm { font-size: .9rem; background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; max-width: 520px }
+.row { display: flex; gap: 6px; flex-wrap: wrap }
 .pas { display: inline-flex; align-items: center; gap: 6px }
 .pas button { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); font-weight: 800 }
 .ajout-bat { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center }

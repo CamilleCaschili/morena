@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { store, modifier } from '../logic/store'
-import { B, BI, CATS, EMPL, RL, type Batiment, type CatKey, type ResKey } from '../data/catalogue'
-import { statut, effCost, attente, previsionSaisons, emplOk, cnt, effetsDe, decrireEffet, lancerChantier, chantiers, dureeChantier, type Statut } from '../logic/regles'
+import { B, CATS, EMPL, RL, JAUGES, type Batiment, type CatKey, type ResKey, type JaugeKey } from '../data/catalogue'
+import { METIERS } from '../data/economie'
+import { statut, effCost, attente, previsionSaisons, emplOk, cnt, effetsDe, decrireEffet, lancerChantier, chantiers, dureeChantier, reqsDe, mainOeuvre, estDefense, metierDe, artisansLibres, gisementsLibres, tirerQualite, lancer, fmt, type Statut } from '../logic/regles'
 import { dateMin } from '../logic/calendrier'
 
 const mode = ref<'ok' | 'bientot' | 'tous'>('ok')
@@ -15,18 +16,23 @@ const fait = ref('')
 const v = computed(() => store.village!)
 const fc = computed(() => previsionSaisons(v.value.etat, v.value.regles))
 const st = (b: Batiment) => statut(v.value.etat, v.value.regles, b)
-const ORD: Record<Statut, number> = { ok: 0, cost: 1, req: 2, empl: 3, special: 4 }
+const ORD: Record<Statut, number> = { ok: 0, cost: 1, mo: 2, artisan: 3, req: 4, empl: 5, special: 6 }
+// « Manque des ressources » : il manque des matériaux, de la main-d'œuvre ou un artisan
+const BIENTOT: Statut[] = ['cost', 'mo', 'artisan']
+const mo = computed(() => mainOeuvre(v.value.etat))
+const libres = computed(() => gisementsLibres(v.value.etat))
+const choixGis = ref('')
 
 const base = computed(() => B.filter(b => b.cost && (autresEmpl.value || emplOk(v.value.etat, b))))
 const nbOk = computed(() => base.value.filter(b => st(b) === 'ok').length)
-const nbBientot = computed(() => base.value.filter(b => st(b) === 'cost').length)
+const nbBientot = computed(() => base.value.filter(b => BIENTOT.includes(st(b))).length)
 
 const liste = computed(() => {
   let l = base.value
   if (cat.value) l = l.filter(b => b.cat === cat.value)
   if (q.value.trim()) { const s = q.value.trim().toLowerCase(); l = l.filter(b => b.nom.toLowerCase().includes(s)) }
   if (mode.value === 'ok') l = l.filter(b => st(b) === 'ok')
-  else if (mode.value === 'bientot') l = l.filter(b => st(b) === 'cost')
+  else if (mode.value === 'bientot') l = l.filter(b => BIENTOT.includes(st(b)))
   return [...l].sort((a, b) => ORD[st(a)] - ORD[st(b)] || attente(v.value.etat, v.value.regles, a, fc.value) - attente(v.value.etat, v.value.regles, b, fc.value) || a.nom.localeCompare(b.nom))
 })
 
@@ -40,7 +46,10 @@ function carte(b: Batiment) {
   const j = s === 'cost' ? attente(e, v.value.regles, b, fc.value) : 0
   return {
     s, couts, nb: cnt(e, b.id), j, duree: dureeChantier(v.value.regles, b.id), enChantier: chantiers(e).filter(x => x.id === b.id).length,
-    reqs: b.req.map(g => ({ ok: g.some(id => cnt(e, id) > 0), txt: g.map(id => BI[id]?.nom ?? id).join(' ou ') })),
+    reqs: reqsDe(e, b),
+    metier: metierDe(v.value.regles, b.id),
+    jauges: (Object.keys(JAUGES) as JaugeKey[]).filter(k => b.jauges[k]).map(k => `${fmt(b.jauges[k])} ${JAUGES[k]}`),
+    moLibre: mo.value ? (estDefense(b) ? mo.value.libresArmee : mo.value.libres) : null,
     effets: effetsDe(v.value.regles, b.id).map(decrireEffet),
     depense: Object.entries(ec).map(([k, n]) => `${n} ${RL[k as ResKey].toLowerCase()}`).join(', '),
   }
@@ -51,10 +60,11 @@ async function construire(b: Batiment) {
   let fin = 0
   const ok = await modifier((e, r) => {
     if (statut(e, r, b) !== 'ok') return false
-    const c = lancerChantier(e, r, b)
+    const c = lancerChantier(e, r, b, choixGis.value && gisementsLibres(e).some(g => g.id === choixGis.value) ? choixGis.value : undefined)
     fin = c.fin
     const ec = Object.entries(c.cout) as [ResKey, number][]
-    return [{ type: 'constr', texte: `Chantier lancé : ${b.nom}${ec.length ? ` (−${ec.map(([k, n]) => `${n} ${RL[k].toLowerCase()}`).join(', −')})` : ', gratuit'}. Terminé en ${dateMin(c.fin)}.` }]
+    const g = e.gisements?.find(x => x.id === c.gisement)
+    return [{ type: 'constr', texte: `Chantier lancé : ${b.nom}${g ? ` sur le gisement de ${RL[g.res].toLowerCase()} (qualité ${g.qualite})` : ''}${ec.length ? ` (−${ec.map(([k, n]) => `${n} ${RL[k].toLowerCase()}`).join(', −')})` : ', gratuit'}. Terminé en ${dateMin(c.fin)}.` + tirerQualite(e, b, lancer(20)) }]
   })
   const d = dureeChantier(v.value.regles, b.id)
   if (ok) { fait.value = `Chantier lancé : ${b.nom} sera terminé en ${dateMin(fin)}, ${d > 1 ? `dans ${d} passages de mois` : 'au prochain passage de mois'}. Le chantier est visible dans l’onglet Village.`; setTimeout(() => { fait.value = '' }, 5000) }
@@ -93,7 +103,10 @@ async function construire(b: Batiment) {
             <span v-for="x in c.couts" :key="x.k" class="cout" :class="{ non: x.manque, mod: x.modifie }" :title="`Vous avez ${x.a}`">
               <s v-if="x.modifie">{{ x.base }}</s> {{ x.val }} {{ RL[x.k].toLowerCase() }}<template v-if="x.manque"> ({{ x.a }})</template>
             </span>
-            <span v-if="b.mo" class="cout mo" title="Main-d'œuvre : pas encore gérée">{{ b.mo }} main-d'œuvre</span>
+            <span v-if="b.mo" class="cout mo" :class="{ non: c.moLibre != null && c.moLibre < b.mo }" :title="c.moLibre == null ? 'Le MJ n’a pas encore indiqué le nombre de villageois' : `${c.moLibre} disponibles`">
+              {{ b.mo }} {{ estDefense(b) ? 'militaires' : 'main-d’œuvre' }}<template v-if="c.moLibre != null && c.moLibre < b.mo"> ({{ Math.max(0, c.moLibre) }})</template>
+            </span>
+            <span v-if="c.metier" class="cout mo" :class="{ non: artisansLibres(v.etat, v.regles, c.metier) < 1 }">1 {{ METIERS[c.metier].nom.toLowerCase() }}</span>
             <span v-if="!c.couts.length && !b.mo" class="cout">Gratuit</span>
           </div>
           <div v-if="c.reqs.length" class="reqs">Prérequis :
@@ -105,10 +118,16 @@ async function construire(b: Batiment) {
           </div>
           <div v-if="c.duree > 1" class="eta">Chantier de {{ c.duree }} mois.</div>
           <div v-if="c.s === 'empl'" class="eta">Emplacement requis : {{ EMPL[b.empl] }}.</div>
-          <div v-for="e in c.effets" :key="e" class="effet">Effet : {{ e }}</div>
+          <div v-if="c.s === 'mo'" class="eta">Pas assez de {{ estDefense(b) ? 'militaires (miliciens, soldats, chevaliers)' : 'villageois disponibles' }} : recrute dans l’onglet Économie.</div>
+          <div v-if="c.s === 'artisan' && c.metier" class="eta">Il faut d’abord recruter un {{ METIERS[c.metier].nom.toLowerCase() }} (onglet Économie).</div>
+          <div v-if="b.effet || c.jauges.length" class="effet">{{ b.effet }}<template v-if="c.jauges.length && !b.effet">{{ c.jauges.join(', ') }}</template></div>
+          <div v-for="e in c.effets" :key="e" class="effet">Effet automatique : {{ e }}</div>
           <div class="act">
             <template v-if="c.s === 'ok'">
               <div v-if="confirmer === b.id" class="confirm">
+                <label v-if="b.req.some(g => g.includes('@gisement')) && libres.length > 1" class="field">Gisement
+                  <select id="c-gisement" v-model="choixGis"><option value="">Le premier libre</option><option v-for="g in libres" :key="g.id" :value="g.id">{{ RL[g.res] }}, qualité {{ g.qualite }}</option></select>
+                </label>
                 <span>{{ c.depense ? `Dépenser ${c.depense} ?` : 'Construire gratuitement ?' }} {{ c.duree > 1 ? `Le chantier durera ${c.duree} mois.` : 'Le bâtiment sera terminé au prochain mois.' }}</span>
                 <div class="row">
                   <button class="btn primary small" type="button" :disabled="store.enCours" @click="construire(b)">Lancer le chantier</button>

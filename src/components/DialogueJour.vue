@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { store, modifier } from '../logic/store'
-import { groupesJour, calculJour, enPause, chantiers, terminerChantiers, fmt } from '../logic/regles'
+import { groupesJour, calculJour, enPause, chantiers, terminerChantiers, fmt, nbTxt, facesDe, nomRegle, lancer, naissanceDue, naissances } from '../logic/regles'
+import { DE_NAISSANCE } from '../data/economie'
 import { dateDe, dateMin, saisonDe, SAISONS } from '../logic/calendrier'
 import { BI, RES, RL } from '../data/catalogue'
 
@@ -12,26 +13,30 @@ const feuille = ref<HTMLDivElement | null>(null)
 const v = computed(() => store.village!)
 const des = computed(() => groupesJour(v.value.etat, v.value.regles)
   .filter(g => g.regle.mode === 'de' && g.regle.n != null)
-  .map(g => ({ ...g, total: g.nb * (g.regle.n as number) })))
+  .map(g => ({ ...g, total: g.nb * (g.regle.n as number), faces: facesDe(g.regle) })))
+// un mois sur deux, la population grandit de 1d10 %
+const naiss = computed(() => naissanceDue(v.value.etat))
+const nbNaiss = computed(() => jets.value.naiss == null ? null : naissances(v.value.etat, jets.value.naiss))
 const calc = computed(() => calculJour(v.value.etat, v.value.regles, jets.value))
 const resume = computed(() => RES.filter(r => calc.value.delta[r.k] || calc.value.lignes.some(l => l.regle.res === r.k)).map(r => {
   const d = calc.value.delta[r.k], o = v.value.etat.stocks[r.k] || 0
-  return { k: r.k, l: r.l, o, d, n: o + d }
+  return { k: r.k, l: r.l, o: nbTxt(o), d, n: o + d }
 }))
 const pauses = computed(() => enPause(v.value.etat, v.value.regles).map(g => `${BI[g.bat]?.nom ?? g.bat} (${RL[g.res].toLowerCase()})`))
 const finis = computed(() => chantiers(v.value.etat).filter(c => c.fin <= v.value.etat.jour + 1).map(c => BI[c.id]?.nom ?? c.id))
-const manquants = computed(() => calc.value.lignes.filter(l => l.v == null).length)
+const manquants = computed(() => calc.value.lignes.filter(l => l.v == null).length + (naiss.value && jets.value.naiss == null ? 1 : 0))
 
-function saisir(cle: string, e: Event) {
+function saisir(cle: string, faces: number, e: Event) {
   const n = parseInt((e.target as HTMLInputElement).value, 10)
   const copie = { ...jets.value }
-  if (n >= 1 && n <= 100) copie[cle] = n
+  if (n >= 1 && n <= faces) copie[cle] = n
   else delete copie[cle]
   jets.value = copie
 }
 function lancerManquants() {
   const copie = { ...jets.value }
-  for (const g of des.value) for (let i = 0; i < g.total; i++) { const k = g.regle.id + '_' + i; if (copie[k] == null) copie[k] = 1 + Math.floor(Math.random() * 100) }
+  for (const g of des.value) for (let i = 0; i < g.total; i++) { const k = g.regle.id + '_' + i; if (copie[k] == null) copie[k] = lancer(g.faces) }
+  if (naiss.value && copie.naiss == null) copie.naiss = lancer(DE_NAISSANCE)
   jets.value = copie
 }
 
@@ -39,23 +44,29 @@ async function valider() {
   const figé = { ...jets.value }
   const ok = await modifier((e, r) => {
     const c = calculJour(e, r, figé)
-    if (!c.pret) return false
+    if (!c.pret || (naissanceDue(e) && figé.naiss == null)) return false
     const parts: string[] = []
     for (const l of c.lignes) {
       if (!l.v) continue
-      parts.push(`${fmt(l.v)} ${RL[l.regle.res].toLowerCase()}${l.detail ? (l.detail.includes('+') ? ` (${l.detail})` : ` (d100 : ${l.detail})`) : ''}`)
+      parts.push(`${fmt(l.v)} ${RL[l.regle.res].toLowerCase()} (${nomRegle(l.regle)}${l.detail ? ', ' + l.detail : ''})`)
     }
     if (e.villageois) parts.push(`−${e.villageois} nourriture (villageois)`)
     const penurie: string[] = []
     for (const x of RES) {
       const n = (e.stocks[x.k] || 0) + c.delta[x.k]
       if (n < 0) penurie.push(x.l.toLowerCase())
-      e.stocks[x.k] = Math.max(0, n)
+      e.stocks[x.k] = Math.max(0, x.k === 'or' ? Math.round(n * 100) / 100 : n)
+    }
+    let bebes = ''
+    if (naissanceDue(e)) {
+      const n = naissances(e, figé.naiss)
+      e.villageois = (e.villageois || 0) + n
+      bebes = ` Naissances : +${n} villageois (d10 : ${figé.naiss} %).`
     }
     const repos = enPause(e, r).map(g => BI[g.bat]?.nom ?? g.bat)
     const fin = `Bilan (${dateMin(e.jour)}) : ` + (parts.join(', ') || 'aucune production.')
       + (repos.length ? ` À l'arrêt (${SAISONS[saisonDe(e.jour)].toLowerCase()}) : ${[...new Set(repos)].join(', ')}.` : '')
-      + (penurie.length ? ` Pénurie de ${penurie.join(', ')} !` : '')
+      + bebes + (penurie.length ? ` Pénurie de ${penurie.join(', ')} !` : '')
     e.jour += 1
     const logs: { type: 'jour' | 'constr'; texte: string }[] = [{ type: 'jour', texte: fin }]
     for (const id of terminerChantiers(e)) logs.push({ type: 'constr', texte: `Chantier terminé : ${BI[id]?.nom ?? id} est construit.` })
@@ -73,36 +84,45 @@ onBeforeUnmount(() => window.removeEventListener('keydown', echap))
   <div class="voile" @click.self="emit('fermer')">
     <div ref="feuille" class="feuille" role="dialog" aria-modal="true" aria-labelledby="titre-jour">
       <h2 id="titre-jour">{{ dateDe(v.etat.jour) }} → {{ dateDe(v.etat.jour + 1) }}</h2>
-      <p v-if="des.length" class="muted intro">Lancez vos d100 et entrez les résultats.</p>
+      <p v-if="des.length || naiss" class="muted intro">Lancez vos dés et entrez les résultats.</p>
 
       <div v-for="g in des" :key="g.regle.id" class="groupe">
-        <div class="gt"><span>{{ BI[g.regle.bat]?.nom ?? g.regle.bat }}{{ g.nb > 1 ? ' ×' + g.nb : '' }}</span><span class="muted">{{ RL[g.regle.res] }}</span></div>
+        <div class="gt"><span>{{ nomRegle(g.regle) }}{{ g.nb > 1 ? ' ×' + g.nb : '' }}</span><span class="muted">{{ RL[g.regle.res] }}</span></div>
         <div class="jets">
           <label v-for="i in g.total" :key="i" class="jet">
-            d100{{ g.total > 1 ? ' n°' + i : '' }}
-            <input :id="`jet-${g.regle.id}-${i - 1}`" type="number" inputmode="numeric" min="1" max="100"
-                   :value="jets[g.regle.id + '_' + (i - 1)] ?? ''" @input="saisir(g.regle.id + '_' + (i - 1), $event)">
+            d{{ g.faces }}{{ g.total > 1 ? ' n°' + i : '' }}
+            <input :id="`jet-${g.regle.id}-${i - 1}`" type="number" inputmode="numeric" min="1" :max="g.faces"
+                   :value="jets[g.regle.id + '_' + (i - 1)] ?? ''" @input="saisir(g.regle.id + '_' + (i - 1), g.faces, $event)">
           </label>
         </div>
       </div>
-      <button v-if="des.length" class="btn small ghost" type="button" @click="lancerManquants">Lancer les dés manquants pour nous</button>
+      <div v-if="naiss" class="groupe">
+        <div class="gt"><span>Naissances (un mois sur deux)</span><span class="muted">{{ v.etat.villageois }} villageois</span></div>
+        <div class="jets">
+          <label class="jet">d10 (%)
+            <input id="jet-naiss" type="number" inputmode="numeric" min="1" max="10" :value="jets.naiss ?? ''" @input="saisir('naiss', 10, $event)">
+          </label>
+          <span v-if="nbNaiss != null" class="muted">+{{ nbNaiss }} villageois</span>
+        </div>
+      </div>
+      <button v-if="des.length || naiss" class="btn small ghost" type="button" @click="lancerManquants">Lancer les dés manquants pour nous</button>
 
       <div class="resume">
         <div v-for="r in resume" :key="r.k" class="ligne num">
           <span>{{ r.l }}</span>
-          <span>{{ r.o }} <span :class="r.d >= 0 ? 'p' : 'm'">{{ fmt(r.d) }}</span> → <b>{{ Math.max(0, r.n) }}</b><span v-if="r.n < 0" class="m"> (manque {{ -r.n }})</span></span>
+          <span>{{ r.o }} <span :class="r.d >= 0 ? 'p' : 'm'">{{ fmt(r.d) }}</span> → <b>{{ nbTxt(Math.max(0, r.n)) }}</b><span v-if="r.n < 0" class="m"> (manque {{ -r.n }})</span></span>
         </div>
         <span v-if="!resume.length" class="muted">Aucune variation.</span>
         <div v-if="v.etat.villageois" class="ligne muted"><span>Dont villageois</span><span>−{{ v.etat.villageois }} nourriture</span></div>
         <p v-if="pauses.length" class="muted" style="margin:8px 0 0">À l'arrêt en {{ SAISONS[saisonDe(v.etat.jour)].toLowerCase() }} : {{ pauses.join(', ') }}.</p>
         <p v-if="finis.length" class="chantiers">Chantier{{ finis.length > 1 ? 's terminés' : ' terminé' }} à la fin du mois : {{ finis.join(', ') }}.</p>
-        <p v-if="calc.ignorees.length" class="flag">Ignoré (quantité à préciser dans Règles) : {{ calc.ignorees.map(r => `${BI[r.bat]?.nom ?? r.bat} (${RL[r.res].toLowerCase()})`).join(', ') }}.</p>
+        <p v-if="calc.ignorees.length" class="flag">Ignoré (quantité à préciser dans Règles) : {{ calc.ignorees.map(r => `${nomRegle(r)} (${RL[r.res].toLowerCase()})`).join(', ') }}.</p>
         <p v-if="manquants" class="muted" style="margin:8px 0 0">Il reste des dés à entrer.</p>
       </div>
 
       <div class="act">
         <button class="btn ghost" type="button" @click="emit('fermer')">Annuler</button>
-        <button class="btn primary" type="button" :disabled="!calc.pret || store.enCours" @click="valider">Passer en {{ dateMin(v.etat.jour + 1) }}</button>
+        <button class="btn primary" type="button" :disabled="!calc.pret || manquants > 0 || store.enCours" @click="valider">Passer en {{ dateMin(v.etat.jour + 1) }}</button>
       </div>
     </div>
   </div>
