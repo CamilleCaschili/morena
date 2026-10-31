@@ -246,8 +246,9 @@ function montrer(id: string) {
   <section>
     <p v-if="logiciel" class="banner" role="status">
       <template v-if="/basic render/i.test(puce)">
-        Windows n'a pas de pilote pour la carte graphique de cet ordinateur : la 3D est calculée par le processeur et sera lente quels que soient les réglages.
-        Installe le pilote graphique (Windows Update &gt; Mises à jour facultatives, ou le site d'Intel, AMD ou NVIDIA), puis redémarre.
+        Ton navigateur n'utilise pas la carte graphique : la 3D est calculée par le processeur et sera lente quels que soient les réglages.
+        Vérifie d'abord dans les paramètres du navigateur (Système) que « Utiliser l'accélération graphique » est activé, puis relance-le.
+        Si ça ne change rien, installe le pilote de ta carte graphique (site d'Intel, AMD ou NVIDIA) et redémarre.
       </template>
       <template v-else>
         Ton navigateur dessine la 3D sans la carte graphique ({{ puce }}) : ce sera lent quels que soient les réglages.
