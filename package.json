@@ -1,0 +1,24 @@
+{
+  "name": "morena",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "three": "^0.169.0",
+    "vue": "^3.4.38"
+  },
+  "devDependencies": {
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "^5.5.4",
+    "vite": "^8.3.5",
+    "vue-tsc": "^3.3.14"
+  }
+}
