@@ -21,10 +21,26 @@ const HAUTEUR_YEUX = 1.7
    ombres : taille de la carte d'ombres (0 = sans ombres) et intervalle entre deux mises à jour. */
 export type Graphismes = 'auto' | 'haute' | 'moyenne' | 'basse'
 export const NIVEAUX = [
-  { nom: 'basse', ombres: 0, tOmbre: 0, budget: 1_100_000, dpr: 1, min: 0.6, flocons: 500 },
+  { nom: 'basse', ombres: 0, tOmbre: 0, budget: 800_000, dpr: 1, min: 0.5, flocons: 400 },
   { nom: 'moyenne', ombres: 1024, tOmbre: 0.3, budget: 2_000_000, dpr: 1.25, min: 0.7, flocons: 1000 },
   { nom: 'haute', ombres: 2048, tOmbre: 0.12, budget: 4_000_000, dpr: 2, min: 0.75, flocons: 1800 },
 ] as const
+/* Éclairage simplifié du niveau bas : chaque matériau réaliste a un double « Lambert », bien moins
+   coûteux par pixel. Le double partage les couleurs de l'original, donc saisons, nuit et fumée suivent. */
+const versLambert = new WeakMap<THREE.Material, THREE.Material>()
+const versStandard = new WeakMap<THREE.Material, THREE.Material>()
+function lambert(m: THREE.Material): THREE.Material {
+  const s = m as THREE.MeshStandardMaterial
+  if (!s.isMeshStandardMaterial) return m
+  let l = versLambert.get(m)
+  if (l) return l
+  const x = new THREE.MeshLambertMaterial({ flatShading: s.flatShading, side: s.side, vertexColors: s.vertexColors, transparent: s.transparent, depthWrite: s.depthWrite, fog: s.fog })
+  x.color = s.color; x.emissive = s.emissive
+  for (const k of ['emissiveIntensity', 'opacity', 'visible'] as const) Object.defineProperty(x, k, { get: () => s[k], set: v => { (s as unknown as Record<string, unknown>)[k] = v }, configurable: true })
+  x.userData = s.userData
+  versLambert.set(m, x); versStandard.set(x, m)
+  return x
+}
 const n0 = (p: THREE.Points | null) => p ? p.geometry.drawRange.count : 0
 /** Puce graphique intégrée ou logicielle : on démarre en qualité moyenne. */
 function gpuModeste() {
@@ -374,6 +390,7 @@ export class VillageScene {
     fusionnerStatiques(this.groupeBat, this.cliquables)
     this.boites = this.cliquables.filter(g => !g.userData.ancre).map(g => new THREE.Box3().setFromObject(g))
     this.decor(empl)
+    this.materiaux(this.groupeBat); this.materiaux(this.groupeDecor); this.alleger()
     this.setSaison(this.saison)
     if (premier) this.cadrer()
   }
@@ -555,6 +572,7 @@ export class VillageScene {
       placés++
     }
     for (const im of [tronc, bas, haut]) { im.count = placés; im.castShadow = true; im.receiveShadow = true; this.groupeDecor.add(im) }
+    this.foret = { ims: [tronc, bas, haut], n: placés }
     this.saisonniers = this.saisonniers.filter(x => !x.m.userData.decor)
     for (const im of [bas, haut]) {
       const m = im.material as THREE.MeshStandardMaterial
@@ -619,6 +637,7 @@ export class VillageScene {
     if (this.moi) libererPerso(this.moi)
     this.moi = construirePerso(skin, couleurDe(id))
     this.moi.g.visible = this.mode === 'balade' && this.troisieme
+    this.materiaux(this.moi.g)
     this.scene.add(this.moi.g)
   }
   setVue(troisieme: boolean) {
@@ -636,6 +655,7 @@ export class VillageScene {
     if (!a) {
       const perso = construirePerso(skin, couleurDe(id), pseudo.slice(0, 24) || '?')
       perso.g.position.set(p.x, 0, p.z)
+      this.materiaux(perso.g)
       this.scene.add(perso.g)
       a = { p: perso, cible: new THREE.Vector3(), yaw: p.yaw, vu: 0 }
       this.autres.set(id, a)
@@ -833,10 +853,13 @@ export class VillageScene {
     const ms = m.t / m.n * 1000
     m.t = 0; m.n = 0
     const min = NIVEAUX[this.niveau].min
-    if (ms > 28 && this.qualite > min) { this.qualite = Math.max(min, this.qualite * 0.88); m.bons = 0; this.lents = 0; this.redim() }
-    else if (ms < 18 && this.qualite < 1 && ++m.bons >= 3) { this.qualite = Math.min(1, this.qualite * 1.15); m.bons = 0; this.redim() }
+    // au niveau bas, si l'on ne tient pas 60 images/s, on se cale sur 30 bien régulières
+    if (this.niveau === 0 && !this.cap30 && ms > 20 && this.qualite <= min) { this.cap30 = true; m.bons = 0; return }
+    const lent = this.cap30 ? 42 : 28, rapide = this.cap30 ? 36 : 18
+    if (ms > lent && this.qualite > min) { this.qualite = Math.max(min, this.qualite * 0.88); m.bons = 0; this.lents = 0; this.redim() }
+    else if (ms < rapide && this.qualite < 1 && ++m.bons >= 3) { this.qualite = Math.min(1, this.qualite * 1.15); m.bons = 0; this.redim() }
     // en auto : si c'est encore lent à la résolution minimale pendant 3 s, on passe au niveau inférieur
-    else if (ms > 30 && this.reglage === 'auto' && this.niveau > 0 && ++this.lents >= 3) {
+    else if (ms > lent + 2 && this.reglage === 'auto' && this.niveau > 0 && ++this.lents >= 3) {
       this.lents = 0
       this.niveau--
       this.qualite = 1
@@ -845,16 +868,36 @@ export class VillageScene {
     }
   }
 
+  /** Matériaux simplifiés au niveau bas, réalistes sinon, pour tout ce qui est sous `racine`. */
+  private materiaux(racine: THREE.Object3D) {
+    const simple = this.niveau === 0
+    racine.traverse(o => {
+      const m = o as THREE.Mesh
+      if (!m.isMesh) return
+      const conv = (x: THREE.Material) => simple ? lambert(x) : versStandard.get(x) ?? x
+      m.material = Array.isArray(m.material) ? m.material.map(conv) : conv(m.material)
+    })
+  }
+  /** au niveau bas : moitié moins d'arbres dans la forêt lointaine */
+  private foret: { ims: THREE.InstancedMesh[]; n: number } | null = null
+  private alleger() {
+    if (this.foret) for (const im of this.foret.ims) im.count = this.niveau === 0 ? Math.floor(this.foret.n * 0.5) : this.foret.n
+  }
+  /** au niveau bas, une image sur deux si la machine ne tient pas 60 images/s : plus régulier que des à-coups */
+  private cap30 = false
+  private dernierRendu = 0
+
   get niveauActuel() { return this.niveau }
   setGraphismes(g: Graphismes) {
     this.reglage = g
     this.niveau = g === 'auto' ? this.niveau : NIVEAUX.findIndex(n => n.nom === g)
-    this.qualite = 1; this.lents = 0
+    this.qualite = 1; this.lents = 0; this.cap30 = false
     this.appliquerNiveau()
   }
   private appliquerNiveau() {
     const n = NIVEAUX[this.niveau]
     const ombres = n.ombres > 0
+    this.materiaux(this.scene)
     if (this.renderer.shadowMap.enabled !== ombres) {
       this.renderer.shadowMap.enabled = ombres
       // les matériaux doivent être recompilés avec ou sans ombres
@@ -868,6 +911,8 @@ export class VillageScene {
       this.soleil.shadow.mapSize.set(n.ombres, n.ombres)
     }
     if (this.neige) this.neige.geometry.setDrawRange(0, n.flocons)
+    if (this.niveau !== 0) this.cap30 = false
+    this.alleger()
     this.mesure = { t: 0, n: 0, bons: 0 }
     this.redim()
   }
@@ -875,6 +920,11 @@ export class VillageScene {
   private boucle = () => {
     this.raf = requestAnimationFrame(this.boucle)
     if (!this.actif) return
+    if (this.cap30) {
+      const now = performance.now()
+      if (now - this.dernierRendu < 30) return
+      this.dernierRendu = now
+    }
     const brut = this.horloge.getDelta()
     const dt = Math.min(brut, 0.05)
     this.ajusterQualite(brut)
@@ -960,7 +1010,7 @@ export class VillageScene {
   }
 
   private fumees(dt: number) {
-    for (const e of this.emetteurs) {
+    for (const e of this.niveau === 0 ? [] : this.emetteurs) {
       e.t -= dt
       if (e.t <= 0) {
         e.t = 0.8 + Math.random() * 0.6
