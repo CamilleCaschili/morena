@@ -29,6 +29,8 @@ export interface Etat {
   qualites?: Partial<Record<Boisson, number>>
   /** case choisie pour chaque exemplaire (clé « id:n », voir cleInstance) ; les autres sont placés automatiquement */
   places?: Record<string, Case>
+  /** version du plan des places : celles d'une ancienne carte sont oubliées (voir VERSION_PLAN) */
+  versionPlan?: number
   /** bonus ou malus de jauges décidés par le MJ (événements) */
   ajustJauges?: Partial<Record<JaugeKey, number>>
 }
@@ -79,21 +81,40 @@ export const gisements = (e: Etat) => e.gisements || []
 /** Gisements sans mine ni chantier de mine */
 export const gisementsLibres = (e: Etat) => gisements(e).filter(g => !g.mine && !chantiers(e).some(c => c.gisement === g.id))
 
+/* ── Plan du village (plan.ts, sur la carte du MJ de carte.ts) ── */
+/** 2 : carte du MJ ; les cases enregistrées avec l'ancienne disposition en carré ne valent plus */
+export const VERSION_PLAN = 2
+const planAJour = (e: Etat) => e.versionPlan === VERSION_PLAN
+export const planDe = (e: Etat) => calculerPlan(normOrdre(e), planAJour(e) ? e.places : {},
+  planAJour(e) ? chantiers(e) : chantiers(e).map(c => ({ ...c, place: undefined })), gisements(e))
+/** Enregistre la case de chaque bâtiment et chantier ; renvoie ceux qui ont dû changer de case. */
+export function figer(e: Etat): string[] {
+  if (!planAJour(e)) {
+    // première fois sur la carte du MJ : tout le village s'y installe, sans le noter bâtiment par bâtiment
+    e.places = {}
+    for (const c of chantiers(e)) delete c.place
+    e.versionPlan = VERSION_PLAN
+    figerPlan(normOrdre(e), e.places, chantiers(e), gisements(e))
+    return []
+  }
+  return figerPlan(normOrdre(e), e.places ||= {}, chantiers(e), gisements(e))
+}
+
 /** Paye b et ouvre son chantier ; le bâtiment n'existe qu'une fois le chantier terminé. */
-/** repousses reçoit les bâtiments de production que le cœur, en grandissant, a poussés plus loin */
+/** repousses reçoit les bâtiments qui ont dû changer de case pour respecter la carte */
 export function lancerChantier(e: Etat, r: Regles, b: Batiment, gisement?: string, place?: Case, repousses: string[] = []): Chantier {
   const cout = effCost(e, r, b)
   for (const [k, n] of Object.entries(cout) as [ResKey, number][]) e.stocks[k] = (e.stocks[k] || 0) - n
   const c: Chantier = { id: b.id, fin: e.jour + dureeChantier(r, b.id), cout }
   if (b.req.some(g => g.includes('@gisement'))) c.gisement = gisement ?? gisementsLibres(e)[0]?.id
   // la case est fixée dès le lancement, comme celles de tout le village : plus rien ne bouge ensuite
-  repousses.push(...figerPlan(normOrdre(e), e.places ||= {}, chantiers(e)))
-  const avant = calculerPlan(normOrdre(e), e.places, chantiers(e))
+  repousses.push(...figer(e))
+  const avant = planDe(e)
   ;(e.chantiers ||= []).push(c)
   if (place && casesLibres(avant, b.id).some(x => cleCase(x) === cleCase(place))) c.place = place
-  else { const p = calculerPlan(normOrdre(e), e.places, chantiers(e)).chantiers; c.place = p[p.length - 1]?.c ?? undefined }
+  else { const p = planDe(e).chantiers; c.place = p[p.length - 1]?.c ?? undefined }
   if (!c.place) delete c.place
-  repousses.push(...figerPlan(normOrdre(e), e.places, chantiers(e)))
+  repousses.push(...figer(e))
   return c
 }
 /** Ajoute au village les chantiers arrivés à terme (à appeler après avoir avancé le cycle). */
@@ -389,8 +410,8 @@ export function fabriquer(e: Etat, x: Recette, n: number): string | false {
   return `Fabrication : ${liste(x.sorties)} (avec ${liste(x.entrees)}).`
 }
 
-/** « Le cœur du village s'agrandit : Champs cultivés repoussé plus loin. » */
-export const texteRepousses = (ids: string[]) => ids.length ? ` Le cœur du village s’agrandit : ${[...new Set(ids)].map(nomBat).join(', ')} ${ids.length > 1 ? 'repoussés' : 'repoussé'} plus loin.` : ''
+/** « Pour respecter la carte : Champs cultivés a changé de place. » */
+export const texteRepousses = (ids: string[]) => ids.length ? ` Pour respecter la carte : ${[...new Set(ids)].map(nomBat).join(', ')} ${ids.length > 1 ? 'ont changé' : 'a changé'} de place.` : ''
 
 export const fmt = (n: number) => (n > 0 ? '+' : n < 0 ? '−' : '') + nbTxt(Math.abs(n))
 export const res = (k: ResKey) => RL[k].toLowerCase()

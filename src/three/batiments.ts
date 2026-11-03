@@ -855,6 +855,90 @@ export const demiPorte = (portes: boolean) => portes ? 1.85 : 1.1
  * Un élément de l'enceinte sur les quatre côtés d'un carré de demi-côté L (unités de modèle),
  * extérieur vers +z avant rotation, une porte par côté centrée en x = gx.
  */
+/**
+ * Un tronçon droit de l'enceinte, le long de x en z = L, l'extérieur vers +z (unités de modèle).
+ * a, b : extrémités ; porte : x de la porte ; trous : passages laissés à la rivière.
+ */
+export function construireLigne(shape: Shape, L: number, a: number, b: number, porte: number, trous: [number, number][], portes: boolean, graine = 1): THREE.Group {
+  const f = new Fab(graine)
+  const rnd = (i: number) => { const x = Math.sin((graine * 1000 + i) * 12.9898) * 43758.5453; return x - Math.floor(x) }
+  const demi = demiPorte(portes)
+  // morceaux pleins : la ligne moins la porte et les passages de la rivière
+  let troncons: [number, number][] = [[a, b]]
+  for (const [t0, t1] of [[porte - demi, porte + demi] as [number, number], ...trous]) {
+    troncons = troncons.flatMap(([x0, x1]): [number, number][] => t1 <= x0 || t0 >= x1 ? [[x0, x1]] : [[x0, t0], [t1, x1]].filter(([u, v]) => v - u > 0.3) as [number, number][])
+  }
+  switch (shape) {
+    case 'palissade': {
+      let i = 0
+      for (const [x0, x1] of troncons) {
+        const n = Math.max(1, Math.round((x1 - x0) / 0.3))
+        for (let j = 0; j <= n; j++) {
+          const x = x0 + (x1 - x0) * j / n, h = 2.0 + rnd(i++) * 0.3
+          f.cyl(0.13, 0.14, h, MURS.bois, x, 0, L, 6)
+          f.cone(0.13, 0.35, 0x7c5533, x, h, L, 6, 0)
+        }
+        f.box(x1 - x0, 0.12, 0.1, 0x6b4a2e, (x0 + x1) / 2, 1.2, L - 0.18)
+      }
+      if (!portes) {
+        for (const sg of [-1, 1]) f.box(0.26, 2.9, 0.26, POUTRE, porte + sg * demi, 0, L)
+        f.box(2 * demi + 0.3, 0.22, 0.3, POUTRE, porte, 2.6, L)
+      }
+      break
+    }
+    case 'mur': {
+      for (const [x0, x1] of troncons) {
+        const len = x1 - x0, c = (x0 + x1) / 2
+        f.box(len, 0.5, 1.05, SOCLE, c, 0, L)
+        f.box(len, 2.4, 0.8, MURS.pierre, c, 0, L)
+        for (const y of [0.95, 1.6]) f.box(len, 0.05, 0.84, CHAINE, c, y, L)
+        for (let x = x0 + 0.4; x < x1 - 0.3; x += 0.62) {
+          f.box(0.38, 0.45, 0.28, MURS.pierre, x, 2.4, L + 0.26)
+          f.meurtriere(x, 2.4, L + 0.41)
+        }
+        f.box(len, 0.3, 0.2, MURS.pierre, c, 2.4, L - 0.3)
+      }
+      // tours au bout de la muraille, contre la montagne
+      for (const x of [a, b]) {
+        f.cyl(1.0, 1.15, 3.4, MURS.pierre, x, 0, L, 12)
+        f.cyl(1.15, 1.15, 0.4, MURS.pierre, x, 3.4, L, 12)
+        for (let i = 0; i < 10; i++) {
+          const an = i / 10 * Math.PI * 2
+          f.box(0.34, 0.4, 0.24, MURS.pierre, x + Math.cos(an) * 1.03, 3.8, L + Math.sin(an) * 1.03).rotation.y = -an + Math.PI / 2
+        }
+        f.cone(0.85, 1.8, TOITS.ardoise, x, 3.85, L, 12, 0)
+      }
+      if (!portes) for (const sg of [-1, 1]) {
+        f.box(0.6, 3.0, 1.1, MURS.pierre, porte + sg * demi, 0, L)
+        f.creneaux(0.6, 1.1, 3.0, MURS.pierre, porte + sg * demi, L, 0.2, 0.35)
+      }
+      break
+    }
+    case 'fosse': {
+      const z = L + 1.7, len = b - a + 1.5, c = (a + b) / 2
+      f.box(len, 0.04, 1.4, 0x4a3d2c, c, -0.02, z)
+      const eau = f.box(len, 0.03, 0.8, matEau, c, 0, z); eau.castShadow = false
+      f.box(len, 0.35, 0.3, 0x7b6a4c, c, 0, z - 0.85)
+      for (let x = a - 0.6; x < b + 0.6; x += 0.5) {
+        if (Math.abs(x - porte) < 1.4 || trous.some(([t0, t1]) => x > t0 && x < t1)) continue
+        f.cone(0.07, 0.6, 0x7c5533, x, 0.15, z + 0.75, 4).rotation.x = -0.5
+      }
+      // pont de bois
+      f.box(1.8, 0.1, 2.0, 0x7c5533, porte, 0.04, z)
+      for (const sg of [-1, 1]) { f.box(0.08, 0.5, 2.0, 0x6b4a2e, porte + sg * 0.86, 0.14, z) }
+      break
+    }
+    case 'porte': {
+      const m = construireModele('porte', {}, graine)
+      m.position.set(porte, 0, L); m.rotation.y = Math.PI
+      f.add(m)
+      break
+    }
+  }
+  fusionner(f.g)
+  return f.g
+}
+
 export function construireEnceinte(shape: Shape, L: number, gx: number, portes: boolean): THREE.Group {
   const g = new THREE.Group()
   const demi = demiPorte(portes)

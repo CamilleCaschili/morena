@@ -2,8 +2,8 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { store, demo, moi, modifier } from '../logic/store'
 import { rejoindreBalade, type Balade } from '../logic/balade'
-import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, toutesRegles, nomRegle, quantiteTxt, nbTxt, jauges, texteRepousses } from '../logic/regles'
-import { calculerPlan, casesLibres, cleInstance, cleCase, dansEnceinte, figerPlan, type Case } from '../logic/plan'
+import { normOrdre, prevision, decrireProduction, effetsDe, decrireEffet, cnt, actif, chantiers, toutesRegles, nomRegle, quantiteTxt, nbTxt, jauges, texteRepousses, planDe, figer } from '../logic/regles'
+import { casesLibres, cleInstance, cleCase, dansEnceinte, type Case } from '../logic/plan'
 import { saisonDe, dateMin, SAISONS, ORDRE_SAISONS, type Saison } from '../logic/calendrier'
 import { BI, CATS, RES, JAUGES, type CatKey, type JaugeKey } from '../data/catalogue'
 import type { VillageScene, Mode, Selection, Graphismes } from '../three/scene'
@@ -74,7 +74,7 @@ const tactile = typeof window !== 'undefined' && window.matchMedia?.('(pointer: 
 const v = computed(() => store.village!)
 const ordre = computed(() => normOrdre(v.value.etat))
 const enChantier = computed(() => chantiers(v.value.etat).map(c => c.id))
-const plan = computed(() => calculerPlan(ordre.value, v.value.etat.places, chantiers(v.value.etat)))
+const plan = computed(() => planDe(v.value.etat))
 const sigPlan = computed(() => JSON.stringify([plan.value.bat, plan.value.chantiers]))
 
 /* ── Déplacer un bâtiment ou un chantier : on choisit une case libre sur la carte ── */
@@ -91,10 +91,9 @@ async function poser(c: Case) {
   finirDeplacement()
   const nom = BI[d.id]?.nom ?? d.id
   await modifier(e => {
+    if (!casesLibres(planDe(e), d.id).some(x => cleCase(x) === cleCase(c))) return false
+    const avant = figer(e)
     const o = normOrdre(e), ch = chantiers(e)
-    const p = calculerPlan(o, e.places, ch)
-    if (!casesLibres(p, d.id).some(x => cleCase(x) === cleCase(c))) return false
-    const avant = figerPlan(o, e.places ||= {}, ch)
     if (d.chantier) {
       const x = ch[d.index - 100000]; if (x?.id !== d.id) return false
       x.place = c
@@ -102,7 +101,7 @@ async function poser(c: Case) {
       if (o[d.index] !== d.id) return false
       ;(e.places ||= {})[cleInstance(o, d.index)] = c
     }
-    const rep = [...avant, ...figerPlan(o, e.places, ch)].filter(id => id !== d.id)
+    const rep = [...avant, ...figer(e)].filter(id => id !== d.id)
     return [{ type: 'constr', texte: `${d.chantier ? 'Chantier déplacé' : 'Bâtiment déplacé'} : ${nom}.` + texteRepousses(rep) }]
   })
 }

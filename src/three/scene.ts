@@ -2,10 +2,12 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { BI } from '../data/catalogue'
-import { construireEnceinte, demiPorte, ECHELLE, ENCEINTE, matFenetre, rayon, appliquerSaison, teinteSaison, NEIGE } from './batiments'
+import { construireLigne, demiPorte, ECHELLE, ENCEINTE, matFenetre, matEau, rayon, appliquerSaison, teinteSaison, NEIGE } from './batiments'
 import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
-import { anneau, cleCase, sousCase, type Case, type Plan } from '../logic/plan'
+import { cleCase, sousCase, type Case, type Plan } from '../logic/plan'
+import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, horsVallee, distLigne, dansPolygone, type P } from '../logic/carte'
+import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, COURS, S } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -16,7 +18,6 @@ export interface Selection { index: number; id: string; chantier?: boolean }
 /** les chantiers sont numérotés après les bâtiments pour ne pas se mélanger avec leurs index */
 const INDEX_CHANTIER = 100000
 
-const S = 5.4 * ECHELLE       // écart entre deux emplacements
 const HAUTEUR_YEUX = 1.7
 /* Niveaux de graphismes. budget : pixels dessinés au plus (au-delà l'image est légèrement agrandie) ;
    ombres : taille de la carte d'ombres (0 = sans ombres) et intervalle entre deux mises à jour. */
@@ -127,7 +128,8 @@ export class VillageScene {
   private saisonniers: { m: THREE.MeshStandardMaterial; base: number; t: Partial<Record<Saison, number | [number, number]>> }[] = []
   private neige: THREE.Points | null = null
   private R = 12
-  private entree = 0           // x de la porte sud, d'où part la balade
+  /** devant la porte sud : d'où part la balade */
+  private depart = new THREE.Vector3()
 
   mode: Mode = 'maquette'
   private yaw = 0
@@ -252,17 +254,14 @@ export class VillageScene {
 
     // les défenses (palissade, muraille, fossé, portes) forment l'enceinte ; le reste occupe les cases du plan
     const items = ordre.map((id, i) => ({ id, i, b: BI[id] })).filter(x => x.b)
-    const parcelles = plan.bat.map(x => ({ id: x.id, i: x.k, b: BI[x.id], c: x.c, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
+    const parcelles = plan.bat.map(x => ({ id: x.id, i: x.k, b: BI[x.id], c: x.c, coeur: x.coeur, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
     const defenses = items.filter(x => ENCEINTE.includes(x.b.shape))
     const matsLot = [0x9a8463, 0x92805f].map(color => new THREE.MeshStandardMaterial({ color, roughness: 1 }))
     // un chantier occupe la parcelle où son bâtiment apparaîtra une fois terminé
-    const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
+    const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c, coeur: x.coeur, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
     const chantiersParcelle = enChantier.filter(x => x.c)
     const chantiersEnceinte = enChantier.filter(x => !x.c)
-    // anneauMax : bord de tout ce qui est construit, cœur et production à l'écart compris
-    let anneauMax = plan.n
     parcelles.forEach(({ id, i, b, c, sc }) => {
-      anneauMax = Math.max(anneauMax, anneau(c))
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
       const x = (c[0] + sc.dx) * S, z = (c[1] + sc.dz) * S, e = ECHELLE * sc.echelle
       const theta = (c[0] === 0 && c[1] === 0) ? 0 : Math.round(Math.atan2(-c[0], -c[1]) / (Math.PI / 2)) * (Math.PI / 2)
@@ -298,33 +297,34 @@ export class VillageScene {
       this.cliquables.push(g)
     }
     chantiersParcelle.forEach(({ id, k, c, sc }) => {
-      anneauMax = Math.max(anneauMax, anneau(c!))
       const x = (c![0] + sc.dx) * S, z = (c![1] + sc.dz) * S
       placerChantier(id, k, x, z, (c![0] === 0 && c![1] === 0) ? 0 : Math.round(Math.atan2(-c![0], -c![1]) / (Math.PI / 2)) * (Math.PI / 2), sc.echelle)
     })
 
-    // rues pavées entre les parcelles du cœur : lit de terre + pavés instanciés
-    const n = plan.n
+    // ── rues pavées : autour de chaque case du cœur, et la grande rue qui relie les deux portes ──
     const LARGEUR = 1.8, PAS = 0.42
     const matChemin = new THREE.MeshStandardMaterial({ color: 0x8c7d64, roughness: 1 })
-    // terre battue des rues et des parcelles : un peu enneigée l'hiver
+    const matTerre = new THREE.MeshStandardMaterial({ color: 0x9b8763, roughness: 1 })
+    // terre battue des rues, des chemins et des parcelles : enneigée l'hiver
     this.saisonniers = this.saisonniers.filter(x => x.m.userData.decor)
     for (const m of [matChemin, ...matsLot]) this.saisonniers.push({ m, base: m.color.getHex(), t: { hiver: [NEIGE, 0.55], automne: [0x7a5a3a, 0.2] } })
-    // enceinte : carré de demi-côté L, une porte par côté sur la rue la plus proche du centre
-    const L = (n + 0.5) * S + 2.2, gx = 0.5 * S
+    this.saisonniers.push({ m: matTerre, base: matTerre.color.getHex(), t: { hiver: [NEIGE, 0.7], automne: [0x7a5a3a, 0.2] } })
+    const PN = PALISSADES.nord, PS = PALISSADES.sud
     const avecEnceinte = defenses.length > 0
-    const lg = avecEnceinte ? 2 * L : (2 * n + 1) * S
-    const bandes: { x: number; z: number; horizontal: boolean; lg: number }[] = []
-    for (let k = -n; k < n; k++) {
-      const off = (k + 0.5) * S
-      for (const horizontal of [true, false]) bandes.push({ x: horizontal ? 0 : off, z: horizontal ? off : 0, horizontal, lg })
+    const pave = new Map<string, [number, number][]>(), terre = new Map<string, [number, number][]>()
+    const occupees = [...parcelles, ...chantiersParcelle] as { c: Case | null; coeur: boolean }[]
+    let xmin = Math.min(PN.porte, PS.porte), xmax = Math.max(PN.porte, PS.porte)
+    for (const { c } of occupees.filter(x => x.coeur && x.c)) {
+      const [i, j] = c!
+      xmin = Math.min(xmin, i - 0.5); xmax = Math.max(xmax, i + 0.5)
+      for (const [x1, z1, x2, z2] of [[i - 0.5, j - 0.5, i + 0.5, j - 0.5], [i - 0.5, j + 0.5, i + 0.5, j + 0.5], [i - 0.5, j - 0.5, i - 0.5, j + 0.5], [i + 0.5, j - 0.5, i + 0.5, j + 0.5]])
+        ajouterLigne(pave, x1 * S, z1 * S, x2 * S, z2 * S)
     }
-    // routes qui sortent par les portes
-    if (avecEnceinte) {
-      const m = L + 5
-      bandes.push({ x: gx, z: m, horizontal: false, lg: 10 }, { x: m, z: -gx, horizontal: true, lg: 10 },
-        { x: -gx, z: -m, horizontal: false, lg: 10 }, { x: -m, z: gx, horizontal: true, lg: 10 })
-    }
+    // grande rue est-ouest (elle franchit la rivière sur un pont), et les rues des deux portes
+    ajouterLigne(pave, xmin * S, 0.5 * S, xmax * S, 0.5 * S)
+    ajouterLigne(pave, PN.porte * S, PN.z * S, PN.porte * S, 0.5 * S)
+    ajouterLigne(pave, PS.porte * S, 0.5 * S, PS.porte * S, PS.z * S)
+    const bandes = fusionLignes(pave).map(({ horizontal, pos, a, b }) => ({ x: horizontal ? (a + b) / 2 : pos, z: horizontal ? pos : (a + b) / 2, horizontal, lg: b - a + LARGEUR }))
     for (const b of bandes) {
       const ch = new THREE.Mesh(new THREE.PlaneGeometry(b.horizontal ? b.lg : LARGEUR, b.horizontal ? LARGEUR : b.lg), matChemin)
       ch.rotation.x = -Math.PI / 2
@@ -334,7 +334,7 @@ export class VillageScene {
     }
     const nt = Math.floor(LARGEUR / PAS)
     const nbMax = bandes.reduce((t, b) => t + Math.floor(b.lg / PAS) * nt, 0)
-    const paves = new THREE.InstancedMesh(new THREE.BoxGeometry(PAS * 0.86, 0.07, PAS * 0.86), matPave, nbMax)
+    const paves = new THREE.InstancedMesh(new THREE.BoxGeometry(PAS * 0.86, 0.07, PAS * 0.86), matPave, Math.max(1, nbMax))
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), ech = new THREE.Vector3(), p = new THREE.Vector3(), coul = new THREE.Color()
     const haut = new THREE.Vector3(0, 1, 0)
     let np = 0
@@ -346,7 +346,10 @@ export class VillageScene {
         // rangées décalées d'un demi-pavé, comme un appareil en quinconce
         const u = -lg / 2 + (i + 0.5 + (j % 2) * 0.5) * PAS, v = -LARGEUR / 2 + (j + 0.5) * PAS + (LARGEUR - nt * PAS) / 2
         if (u > lg / 2 - PAS * 0.4) continue
-        p.set(b.x + (b.horizontal ? u : v), 0.01 + r * 0.015, b.z + (b.horizontal ? v : u))
+        // pas de pavés dans l'eau : le pont passe au-dessus
+        const px = b.x + (b.horizontal ? u : v), pz = b.z + (b.horizontal ? v : u)
+        if (distRiviereLisse(px, pz) < LARGEUR_RIVIERE * S / 2 + 0.3) continue
+        p.set(px, 0.01 + r * 0.015, pz)
         q.setFromAxisAngle(haut, (r - 0.5) * 0.25)
         ech.set(0.85 + r2 * 0.25, 1, 0.85 + r * 0.25)
         m4.compose(p, q, ech)
@@ -359,59 +362,54 @@ export class VillageScene {
     paves.receiveShadow = true
     this.groupeBat.add(paves)
 
-    // chemins de terre vers les bâtiments hors des murs : ils longent les bords des cases (jamais à travers
-    // un bâtiment) jusqu'à la route de la porte la plus proche
-    const bord = avecEnceinte ? L : (n + 0.5) * S
-    const lignes = new Map<string, [number, number][]>()   // 'x:…' ou 'z:…' → intervalles
-    const ajouterSegment = (x1: number, z1: number, x2: number, z2: number) => {
-      const horizontal = Math.abs(z1 - z2) < 0.01
-      const k = horizontal ? 'z:' + z1.toFixed(2) : 'x:' + x1.toFixed(2)
-      const a = horizontal ? x1 : z1, b = horizontal ? x2 : z2
-      if (Math.abs(a - b) < 0.01) return
-      ;(lignes.get(k) ?? lignes.set(k, []).get(k)!).push([Math.min(a, b), Math.max(a, b)])
-    }
-    // repère de la route d'un côté : u le long des murs (route en u = S/2), w vers l'extérieur
-    const COTES = {
-      sud: { versUW: (x: number, z: number) => [x, z], versXZ: (u: number, w: number) => [u, w] },
-      nord: { versUW: (x: number, z: number) => [-x, -z], versXZ: (u: number, w: number) => [-u, -w] },
-      est: { versUW: (x: number, z: number) => [-z, x], versXZ: (u: number, w: number) => [w, -u] },
-      ouest: { versUW: (x: number, z: number) => [z, -x], versXZ: (u: number, w: number) => [-w, u] },
-    }
-    const dehors = [...parcelles.map(x => x.c), ...chantiersParcelle.map(x => x.c!)].filter(c => anneau(c) > n + 1)
-    for (const [i, j] of new Map(dehors.map(c => [cleCase(c), c])).values()) {
-      const cote = Math.abs(j) >= Math.abs(i) ? (j > 0 ? COTES.sud : COTES.nord) : (i > 0 ? COTES.est : COTES.ouest)
-      const [cu, cw] = cote.versUW(i * S, j * S)
-      // coin de la case tourné vers le village et vers la route
-      const u0 = cu > gx ? cu - gx : cu + gx, w0 = cw - gx
-      const p1 = cote.versXZ(u0, w0), p2 = cote.versXZ(gx, w0), p3 = cote.versXZ(gx, bord)
-      ajouterSegment(p1[0], p1[1], p2[0], p2[1])
-      ajouterSegment(p2[0], p2[1], p3[0], p3[1])
-    }
-    if (lignes.size) {
-      const matTerre = new THREE.MeshStandardMaterial({ color: 0x9b8763, roughness: 1 })
-      this.saisonniers.push({ m: matTerre, base: matTerre.color.getHex(), t: { hiver: [NEIGE, 0.7], automne: [0x7a5a3a, 0.2] } })
-      const LT = 1.3
-      for (const [k, ivs] of lignes) {
-        // fusion des morceaux qui se chevauchent sur une même ligne
-        ivs.sort((a, b) => a[0] - b[0])
-        const fus: [number, number][] = []
-        for (const iv of ivs) { const d = fus[fus.length - 1]; if (d && iv[0] <= d[1] + 0.01) d[1] = Math.max(d[1], iv[1]); else fus.push([...iv]) }
-        const pos = Number(k.slice(2)), horizontal = k[0] === 'z'
-        for (const [a, b] of fus) {
-          const lg = b - a + LT, m = (a + b) / 2
-          const ch = new THREE.Mesh(new THREE.PlaneGeometry(horizontal ? lg : LT, horizontal ? LT : lg), matTerre)
-          ch.rotation.x = -Math.PI / 2
-          ch.position.set(horizontal ? m : pos, 0.008, horizontal ? pos : m)
-          ch.receiveShadow = true
-          this.groupeBat.add(ch)
-        }
+    // ── chemins de terre vers les bâtiments hors du cœur : ils longent les bords des cases (jamais à travers
+    // un bâtiment) jusqu'à la rue de la porte la plus proche ──
+    for (const k of new Set(occupees.filter(x => !x.coeur && x.c).map(x => cleCase(x.c!)))) {
+      const [i, j] = k.split(',').map(Number)
+      if (j < PN.z || j > PS.z) {
+        // hors des palissades : on longe la colonne jusqu'à la piste qui court devant la palissade
+        // (rangée laissée libre), puis la piste mène à la porte ; les chemins se rejoignent au lieu de se multiplier
+        const P = j < PN.z ? PN : PS, sens = j < PN.z ? 1 : -1
+        const zPiste = (P.z - sens * 0.5) * S, xr = P.porte * S
+        const zc = (j + sens * 0.5) * S, xc = i * S > xr ? (i - 0.5) * S : (i + 0.5) * S
+        ajouterLigne(terre, xc, zc, xc, zPiste); ajouterLigne(terre, xc, zPiste, xr, zPiste); ajouterLigne(terre, xr, zPiste, xr, P.z * S)
+      } else {
+        // entre les palissades (vignoble…) : jusqu'à la rue d'une porte, puis la grande rue
+        const xr = (i < 0 ? PS.porte : PN.porte) * S, zc = (j <= 0 ? j + 0.5 : j - 0.5) * S, xc = i * S > xr ? (i - 0.5) * S : (i + 0.5) * S
+        ajouterLigne(terre, xc, zc, xr, zc); ajouterLigne(terre, xr, zc, xr, 0.5 * S)
       }
     }
+    const LT = 1.3
+    const chemins = fusionLignes(terre)
+    for (const { horizontal, pos, a, b } of chemins) {
+      const lg = b - a + LT, m = (a + b) / 2
+      const ch = new THREE.Mesh(new THREE.PlaneGeometry(horizontal ? lg : LT, horizontal ? LT : lg), matTerre)
+      ch.rotation.x = -Math.PI / 2
+      ch.position.set(horizontal ? m : pos, 0.008, horizontal ? pos : m)
+      ch.receiveShadow = true
+      this.groupeBat.add(ch)
+    }
+    // routes de terre : vers les plaines au sud-ouest, vers les mines au nord
+    const routes = [ROUTE_PLAINES, ROUTE_NORD].map(r => r.map(([x, z]) => [x * S, z * S] as [number, number]))
+    for (const r of routes) this.groupeBat.add(ruban(r, 2.4, matTerre, 0.009))
 
-    this.R = (n + 0.5) * S
-    this.entree = avecEnceinte ? gx : 0
-    // les bâtiments à l'écart repoussent les collines et la forêt
-    const Rdehors = anneauMax > n ? (anneauMax + 0.5) * S + 3 : 0
+    // ── ponts là où une rue, un chemin ou une route franchit la rivière ──
+    const traversees: { x: number; z: number; angle: number; large: number }[] = []
+    for (const { horizontal, pos, a, b } of fusionLignes(pave)) for (const t of croiserRiviere(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b]))
+      traversees.push({ ...t, angle: horizontal ? 0 : Math.PI / 2, large: LARGEUR + 0.6 })
+    for (const { horizontal, pos, a, b } of chemins) for (const t of croiserRiviere(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b]))
+      traversees.push({ ...t, angle: horizontal ? 0 : Math.PI / 2, large: LT + 0.5 })
+    for (const r of routes) for (let k = 1; k < r.length; k++) for (const t of croiserRiviere(r[k - 1], r[k]))
+      traversees.push({ ...t, angle: Math.atan2(r[k][1] - r[k - 1][1], r[k][0] - r[k - 1][0]), large: 2.8 })
+    for (const t of traversees) {
+      const g = construirePont(LARGEUR_RIVIERE * S + 2.6, t.large)
+      g.position.set(t.x, 0, t.z); g.rotation.y = -t.angle
+      this.groupeBat.add(g)
+    }
+
+    // ── enceinte : les deux palissades du MJ, au nord et au sud du village, avec une porte chacune ──
+    this.R = 9 * S
+    this.depart.set(PS.porte * S, 0, (PS.z + 2.2) * S)
     if (avecEnceinte) {
       const formes = new Set(defenses.map(x => x.b.shape))
       const portes = formes.has('porte'), demi = demiPorte(portes) * ECHELLE
@@ -420,30 +418,36 @@ export class VillageScene {
         // une seule fois par type ; la muraille remplace la palissade
         if (vus.has(b.shape) || (b.shape === 'palissade' && formes.has('mur'))) continue
         vus.add(b.shape)
-        const g = construireEnceinte(b.shape, L / ECHELLE, gx / ECHELLE, portes)
+        const g = new THREE.Group()
+        for (const [P, sens] of [[PS, 1], [PN, -1]] as const) {
+          // repère du tronçon : l'extérieur vers +z ; le côté nord est tourné d'un demi-tour (x devient −x)
+          const trous = passagesRiviere(P.z * S).map(([t0, t1]) => (sens > 0 ? [t0, t1] : [-t1, -t0]).map(t => t / ECHELLE) as [number, number])
+          const [a, bb] = sens > 0 ? [P.a, P.b] : [-P.b, -P.a]
+          const l = construireLigne(b.shape, sens * P.z * S / ECHELLE, a * S / ECHELLE, bb * S / ECHELLE, sens * P.porte * S / ECHELLE, trous, portes, sens > 0 ? 1 : 3)
+          l.rotation.y = sens > 0 ? 0 : Math.PI
+          g.add(l)
+          if (b.shape === 'palissade' || b.shape === 'mur') {
+            const eau = passagesRiviere(P.z * S)
+            for (let x = P.a * S; x <= P.b * S; x += 1.1) {
+              if (Math.abs(x - P.porte * S) < demi || eau.some(([t0, t1]) => x > t0 && x < t1)) continue
+              this.collisions.push({ x, z: P.z * S, r: 0.7 })
+            }
+          }
+        }
         g.scale.setScalar(ECHELLE)
         g.userData.index = i
         g.userData.id = id
-        g.userData.ancre = new THREE.Vector3(gx, 0, L)
+        g.userData.ancre = new THREE.Vector3(PS.porte * S, 0, PS.z * S)
         this.groupeBat.add(g)
         this.cliquables.push(g)
-        if (b.shape === 'palissade' || b.shape === 'mur') {
-          for (let t = -L; t <= L; t += 1.1) {
-            if (Math.abs(t - gx) < demi) continue
-            this.collisions.push({ x: t, z: L, r: 0.7 }, { x: L, z: -t, r: 0.7 }, { x: -t, z: -L, r: 0.7 }, { x: -L, z: t, r: 0.7 })
-          }
-        }
       }
-      this.R = L + (formes.has('fosse') ? 5 : 3)
     }
-    // chantiers de défense : matériaux entreposés le long de la route de la porte sud
-    const Lc = avecEnceinte ? L : this.R
+    // chantiers de défense : matériaux entreposés devant la porte sud
     chantiersEnceinte.forEach(({ id, k }, n) => {
-      placerChantier(id, k, this.entree + (n % 2 ? -1 : 1) * 0.42 * S, Lc + 7 + Math.floor(n / 2) * 5, 0)
+      placerChantier(id, k, PS.porte * S + (n % 2 ? -1 : 1) * 3.4, (PS.z + 0.9 + Math.floor(n / 2) * 0.7) * S, 0)
     })
-    this.R = Math.max(this.R, Rdehors)
     const sc = this.soleil.shadow.camera
-    sc.left = sc.bottom = -(this.R + 8); sc.right = sc.top = this.R + 8; sc.near = 1; sc.far = 300
+    sc.left = sc.bottom = -(this.R + 12); sc.right = sc.top = this.R + 12; sc.near = 1; sc.far = 320
     sc.updateProjectionMatrix()
 
     this.regrouper()
@@ -564,82 +568,88 @@ export class VillageScene {
     }
   }
 
+  /** Décor de la carte du MJ : vallée plate entre deux montagnes, ouverte au sud-ouest sur les plaines, et la rivière. */
   private decor(empl: string[]) {
-    const sig = empl.join(',') + '|' + this.R + '|' + this.entree
+    const sig = empl.join(',')
     if (sig === this.signatureDecor) return
     this.signatureDecor = sig
     for (const o of [...this.groupeDecor.children]) { this.groupeDecor.remove(o); this.libérer(o) }
-
-    const R = this.R
-    // point d'arrivée de la balade et route d'accès : pas d'arbre ni de rocher dans les pattes
-    const ex = this.entree
-    const degage = (x: number, z: number) => Math.hypot(x - ex, z - (R + 4)) < 8 || (Math.abs(x - ex) < 4 && z > R - 4 && z < R + 14)
     const alea = (k: number) => { const x = Math.sin(k * 91.17 + 3.3) * 43758.5453; return x - Math.floor(x) }
+    const versCase = (x: number, z: number): P => [x / S, z / S]
+    // le long des routes et devant la porte sud (départ de la balade) : rien dans les pattes
+    const routes = [ROUTE_PLAINES, ROUTE_NORD]
+    const degage = (x: number, z: number) => routes.some(r => distLigne(versCase(x, z), r) < 1.6) || this.depart.distanceTo(new THREE.Vector3(x, 0, z)) < 10
 
-    // sol vallonné, plat dans le village
-    const sol = new THREE.PlaneGeometry(420, 420, 90, 90)
+    // sol : plat au fond de la vallée et dans les plaines, il monte vers les montagnes
+    const sol = new THREE.PlaneGeometry(480, 480, 150, 150)
     sol.rotateX(-Math.PI / 2)
     const pos = sol.attributes.position as THREE.BufferAttribute
-    const couleurs: number[] = []
-    const c = new THREE.Color()
+    const couleurs: number[] = [], loins = new Float32Array(pos.count)
+    const c = new THREE.Color(), roche = new THREE.Color(0x6f7568)
     for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i)
-      const d = Math.hypot(x, z)
-      const loin = THREE.MathUtils.smoothstep(d, R + 6, R + 40)
-      const h = loin * (Math.sin(x * 0.07) * Math.cos(z * 0.06) * 2.2 + Math.sin(x * 0.021 + z * 0.03) * 3.5 + 1.5)
-      pos.setY(i, h - 0.02)
+      const x = pos.getX(i), z = pos.getZ(i), d = horsVallee(versCase(x, z))
+      pos.setY(i, hauteurSol(x, z, d) - 0.02)
+      const loin = Math.max(0, Math.min(1, d / 6))
+      loins[i] = loin
       const v = alea(i) * 0.08
-      c.setRGB(0.42 + v - loin * 0.06, 0.55 + v - loin * 0.04, 0.33 + v * 0.5)
+      c.setRGB(0.42 + v, 0.55 + v, 0.33 + v * 0.5).lerp(roche, loin * 0.55)
       couleurs.push(c.r, c.g, c.b)
     }
     sol.setAttribute('color', new THREE.Float32BufferAttribute(couleurs, 3))
-    const loins = new Float32Array(pos.count)
-    for (let i = 0; i < pos.count; i++) loins[i] = THREE.MathUtils.smoothstep(Math.hypot(pos.getX(i), pos.getZ(i)), R + 6, R + 40)
     this.sol = { geo: sol, base: new Float32Array(couleurs), loin: loins }
     sol.computeVertexNormals()
     const msol = new THREE.Mesh(sol, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }))
     msol.receiveShadow = true
     this.groupeDecor.add(msol)
 
-    // montagnes
-    const nbM = empl.includes('M') ? 26 : 10
+    // rivière : berges de terre, puis l'eau
+    const matBerge = new THREE.MeshStandardMaterial({ color: 0x6f6447, roughness: 1 })
+    matBerge.userData.decor = true
+    this.saisonniers = this.saisonniers.filter(x => !x.m.userData.decor)
+    this.saisonniers.push({ m: matBerge, base: matBerge.color.getHex(), t: { hiver: [NEIGE, 0.6] } })
+    for (const cours of COURS) {
+      this.groupeDecor.add(ruban(cours, LARGEUR_RIVIERE * S + 1.4, matBerge, 0.006))
+      const eau = ruban(cours, LARGEUR_RIVIERE * S, matEau, 0.03)
+      eau.receiveShadow = false
+      this.groupeDecor.add(eau)
+    }
+
+    // montagnes de part et d'autre de la vallée (plus hautes et plus serrées avec l'emplacement Montagne)
     const matRoche = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
     const matRoche2 = new THREE.MeshStandardMaterial({ color: 0x5c6773, roughness: 1, flatShading: true })
     const matNeige = new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.8, flatShading: true })
-    for (let k = 0; k < nbM; k++) {
-      const a = (k / nbM) * Math.PI * 2 + alea(k) * 0.2
-      const d = 120 + alea(k + 50) * 70
-      const r = 22 + alea(k + 7) * 26
-      const h = 32 + alea(k + 13) * 46
-      const seg = 6 + Math.floor(alea(k + 3) * 3)
-      const rot = alea(k + 21) * Math.PI
+    const pasM = empl.includes('M') ? 22 : 30
+    let k = 0
+    for (let gx = -230; gx <= 230; gx += pasM) for (let gz = -230; gz <= 230; gz += pasM) {
+      k++
+      const x = gx + (alea(k) - 0.5) * pasM, z = gz + (alea(k + 900) - 0.5) * pasM
+      const d = horsVallee(versCase(x, z))
+      if (d < 4.5) continue
+      const r = 14 + alea(k + 7) * 16 + Math.min(d, 14) * 0.8, h = 26 + alea(k + 13) * 30 + Math.min(d, 16) * 2.6
+      const seg = 6 + Math.floor(alea(k + 3) * 3), rot = alea(k + 21) * Math.PI, y = hauteurSol(x, z, d) - 2
       const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), k % 2 ? matRoche : matRoche2)
-      m.position.set(Math.cos(a) * d, h / 2 - 1, Math.sin(a) * d)
-      m.rotation.y = rot
-      const kNeige = 0.34
-      const n = new THREE.Mesh(new THREE.ConeGeometry(r * kNeige * 1.02, h * kNeige, seg), matNeige)
-      n.position.set(m.position.x, h - 1 - (h * kNeige) / 2 + 0.05, m.position.z)
-      n.rotation.y = rot
+      m.position.set(x, y + h / 2, z); m.rotation.y = rot
+      const kN = 0.34
+      const n = new THREE.Mesh(new THREE.ConeGeometry(r * kN * 1.02, h * kN, seg), matNeige)
+      n.position.set(x, y + h - (h * kN) / 2 + 0.05, z); n.rotation.y = rot
       this.groupeDecor.add(m, n)
     }
 
-    // forêt (instanciée)
+    // forêt (instanciée) : sur les pentes de la vallée, et quelques bosquets dans les plaines
     const avecForet = empl.includes('F')
-    const nbArbres = avecForet ? 520 : 140
+    const nbArbres = avecForet ? 800 : 400
     const tronc = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.24, 1.2, 5), new THREE.MeshStandardMaterial({ color: 0x5a3d26, flatShading: true }), nbArbres)
     const bas = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 3.2, 6), new THREE.MeshStandardMaterial({ color: 0x2c573d, flatShading: true }), nbArbres)
     const haut = new THREE.InstancedMesh(new THREE.ConeGeometry(1.15, 2.4, 6), new THREE.MeshStandardMaterial({ color: 0x3a6f4f, flatShading: true }), nbArbres)
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3()
     let placés = 0
-    for (let k = 0; placés < nbArbres && k < nbArbres * 4; k++) {
-      // la forêt occupe surtout un côté (lisière), plus quelques arbres épars ailleurs
-      let a = alea(k * 3 + 1) * Math.PI * 2
-      if (avecForet && k % 4 !== 0) a = Math.PI * 0.55 + (alea(k * 3 + 1) - 0.5) * Math.PI * 1.1
-      const d = R + 5 + Math.pow(alea(k * 3 + 2), 0.7) * 70
-      const x = Math.cos(a) * d, z = Math.sin(a) * d
-      if (degage(x, z)) continue
-      const s = 0.8 + alea(k * 3 + 3) * 0.8
-      const yh = THREE.MathUtils.smoothstep(d, R + 6, R + 40) * (Math.sin(x * 0.07) * Math.cos(z * 0.06) * 2.2 + Math.sin(x * 0.021 + z * 0.03) * 3.5 + 1.5)
+    for (let k = 0; placés < nbArbres && k < nbArbres * 8; k++) {
+      const x = (alea(k * 3 + 1) - 0.5) * 420, z = (alea(k * 3 + 2) - 0.5) * 420
+      const cs = versCase(x, z), d = horsVallee(cs)
+      const pente = d > 0.4 && d < 6.5
+      const bosquet = d < -1.5 && Math.hypot(cs[0], cs[1]) > 17 && !dansPolygone(cs, CHAMPS) && alea(k + 77) < 0.18
+      if ((!pente && !bosquet) || degage(x, z) || distRiviereLisse(x, z) < 5) continue
+      const s = 0.8 + alea(k * 3 + 3) * 0.8, yh = hauteurSol(x, z, d)
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), alea(k) * 6)
       sc.set(s, s, s)
       p.set(x, yh + 0.6 * s, z); m4.compose(p, q, sc); tronc.setMatrixAt(placés, m4)
@@ -649,23 +659,23 @@ export class VillageScene {
     }
     for (const im of [tronc, bas, haut]) { im.count = placés; im.castShadow = true; im.receiveShadow = true; this.groupeDecor.add(im) }
     this.foret = { ims: [tronc, bas, haut], n: placés }
-    this.saisonniers = this.saisonniers.filter(x => !x.m.userData.decor)
     for (const im of [bas, haut]) {
       const m = im.material as THREE.MeshStandardMaterial
       m.userData.decor = true
       this.saisonniers.push({ m, base: m.color.getHex(), t: { hiver: [NEIGE, 0.4] } })
     }
 
-    // rochers épars
+    // rochers épars au pied des montagnes
     const matRoc = new THREE.MeshStandardMaterial({ color: 0x8a8579, flatShading: true, roughness: 1 })
-    for (let k = 0; k < 40; k++) {
-      const a = alea(k + 300) * Math.PI * 2, d = R + 4 + alea(k + 400) * 50
-      if (degage(Math.cos(a) * d, Math.sin(a) * d)) continue
+    for (let k = 0, n = 0; n < 50 && k < 400; k++) {
+      const x = (alea(k + 300) - 0.5) * 360, z = (alea(k + 400) - 0.5) * 360, d = horsVallee(versCase(x, z))
+      if (d < 0.3 || d > 5 || degage(x, z)) continue
       const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5 + alea(k + 500) * 1.4, 0), matRoc)
-      r.position.set(Math.cos(a) * d, 0.2, Math.sin(a) * d)
+      r.position.set(x, hauteurSol(x, z, d) + 0.2, z)
       r.rotation.set(alea(k) * 3, alea(k + 1) * 3, 0)
       r.castShadow = true; r.receiveShadow = true
       this.groupeDecor.add(r)
+      n++
     }
     // le sol reste à part : ses couleurs changent avec les saisons
     fusionnerStatiques(this.groupeDecor, [msol])
@@ -697,7 +707,7 @@ export class VillageScene {
     this.razTouches()
     if (m === 'balade') {
       this.controls.enabled = false
-      this.pos.set(this.entree, 0, this.R + 4)
+      this.pos.copy(this.depart)
       this.yaw = 0; this.pitch = -0.15
       this.envoiForce = true
       this.placerCamera()
@@ -1078,8 +1088,8 @@ export class VillageScene {
         const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz), min = c.r + 0.35
         if (d < min && d > 0.0001) { p.x = c.x + dx / d * min; p.z = c.z + dz / d * min }
       }
-      const lim = this.R + 30, d = Math.hypot(p.x, p.z)
-      if (d > lim) { p.x *= lim / d; p.z *= lim / d }
+      // on reste au fond de la vallée et dans les plaines : les montagnes ne se gravissent pas
+      if (horsVallee([p.x / S, p.z / S]) > 0.4) { p.x = avant.x; p.z = avant.z }
     }
     this.vitesse = avant.distanceTo(p) / Math.max(dt, 1e-3)
     this.placerCamera()
