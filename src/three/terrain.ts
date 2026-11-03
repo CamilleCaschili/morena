@@ -115,5 +115,6 @@ const lisse = (t: number) => { t = Math.max(0, Math.min(1, t)); return t * t * (
 export function hauteurSol(x: number, z: number, d = horsVallee([x / S, z / S])) {
   if (d <= 0) return 0
   const bosses = Math.sin(x * 0.07) * Math.cos(z * 0.06) * 2.2 + Math.sin(x * 0.021 + z * 0.03) * 3.5 + 1.5
-  return lisse(d / 7) * 20 + lisse(d / 3) * bosses
+  // les pentes montent vite dès le bord de la vallée : on se sent enclavé entre les montagnes
+  return lisse(d / 3.5) * 34 + lisse(d / 12) * 26 + lisse(d / 2) * bosses
 }

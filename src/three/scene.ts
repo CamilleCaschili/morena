@@ -189,7 +189,8 @@ export class VillageScene {
     this.controls.enableDamping = true
     this.controls.maxPolarAngle = 1.38
     this.controls.minDistance = 6
-    this.controls.maxDistance = 160
+    // au-delà, la caméra serait dans les montagnes qui entourent la vallée
+    this.controls.maxDistance = 125
     this.controls.screenSpacePanning = false
 
     this.hemi = new THREE.HemisphereLight(0xcfe3f5, 0x5d6b45, 1)
@@ -568,6 +569,18 @@ export class VillageScene {
     }
   }
 
+  /** sommets coniques des montagnes, pour garder la caméra au-dessus */
+  private cones: { x: number; z: number; r: number; y: number; h: number }[] = []
+  /** hauteur du terrain (sol et montagnes) en x, z */
+  private relief(x: number, z: number) {
+    let h = hauteurSol(x, z)
+    for (const c of this.cones) {
+      const d = Math.hypot(x - c.x, z - c.z)
+      if (d < c.r) h = Math.max(h, c.y + c.h * (1 - d / c.r))
+    }
+    return h
+  }
+
   /** Décor de la carte du MJ : vallée plate entre deux montagnes, ouverte au sud-ouest sur les plaines, et la rivière. */
   private decor(empl: string[]) {
     const sig = empl.join(',')
@@ -581,7 +594,8 @@ export class VillageScene {
     const degage = (x: number, z: number) => routes.some(r => distLigne(versCase(x, z), r) < 1.6) || this.depart.distanceTo(new THREE.Vector3(x, 0, z)) < 10
 
     // sol : plat au fond de la vallée et dans les plaines, il monte vers les montagnes
-    const sol = new THREE.PlaneGeometry(480, 480, 150, 150)
+    // bien plus grand que ce que la caméra peut voir, pour ne jamais apercevoir le bord ni le dessous
+    const sol = new THREE.PlaneGeometry(1400, 1400, 200, 200)
     sol.rotateX(-Math.PI / 2)
     const pos = sol.attributes.position as THREE.BufferAttribute
     const couleurs: number[] = [], loins = new Float32Array(pos.count)
@@ -589,7 +603,7 @@ export class VillageScene {
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), z = pos.getZ(i), d = horsVallee(versCase(x, z))
       pos.setY(i, hauteurSol(x, z, d) - 0.02)
-      const loin = Math.max(0, Math.min(1, d / 6))
+      const loin = Math.max(0, Math.min(1, d / 4))
       loins[i] = loin
       const v = alea(i) * 0.08
       c.setRGB(0.42 + v, 0.55 + v, 0.33 + v * 0.5).lerp(roche, loin * 0.55)
@@ -618,15 +632,18 @@ export class VillageScene {
     const matRoche = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
     const matRoche2 = new THREE.MeshStandardMaterial({ color: 0x5c6773, roughness: 1, flatShading: true })
     const matNeige = new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.8, flatShading: true })
-    const pasM = empl.includes('M') ? 22 : 30
+    // serrées et hautes au bord de la vallée, plus espacées au loin
+    const pasM = empl.includes('M') ? 17 : 21
+    this.cones = []
     let k = 0
-    for (let gx = -230; gx <= 230; gx += pasM) for (let gz = -230; gz <= 230; gz += pasM) {
+    for (let gx = -420; gx <= 420; gx += pasM) for (let gz = -420; gz <= 420; gz += pasM) {
       k++
       const x = gx + (alea(k) - 0.5) * pasM, z = gz + (alea(k + 900) - 0.5) * pasM
       const d = horsVallee(versCase(x, z))
-      if (d < 4.5) continue
-      const r = 14 + alea(k + 7) * 16 + Math.min(d, 14) * 0.8, h = 26 + alea(k + 13) * 30 + Math.min(d, 16) * 2.6
-      const seg = 6 + Math.floor(alea(k + 3) * 3), rot = alea(k + 21) * Math.PI, y = hauteurSol(x, z, d) - 2
+      if (d < 1.6 || (d > 14 && alea(k + 55) < 0.55)) continue
+      const r = 16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9, h = 42 + alea(k + 13) * 46 + Math.min(d, 10) * 3
+      const seg = 6 + Math.floor(alea(k + 3) * 3), rot = alea(k + 21) * Math.PI, y = hauteurSol(x, z, d) - 4
+      this.cones.push({ x, z, r, y, h })
       const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), k % 2 ? matRoche : matRoche2)
       m.position.set(x, y + h / 2, z); m.rotation.y = rot
       const kN = 0.34
@@ -646,7 +663,8 @@ export class VillageScene {
     for (let k = 0; placés < nbArbres && k < nbArbres * 8; k++) {
       const x = (alea(k * 3 + 1) - 0.5) * 420, z = (alea(k * 3 + 2) - 0.5) * 420
       const cs = versCase(x, z), d = horsVallee(cs)
-      const pente = d > 0.4 && d < 6.5
+      // au pied des pentes et sur le bas des versants, là où l'on ne construit pas
+      const pente = d > -0.5 && d < 3
       const bosquet = d < -1.5 && Math.hypot(cs[0], cs[1]) > 17 && !dansPolygone(cs, CHAMPS) && alea(k + 77) < 0.18
       if ((!pente && !bosquet) || degage(x, z) || distRiviereLisse(x, z) < 5) continue
       const s = 0.8 + alea(k * 3 + 3) * 0.8, yh = hauteurSol(x, z, d)
@@ -1053,6 +1071,9 @@ export class VillageScene {
         if (this.controls.target.distanceTo(this.cible) < 0.05) this.cible = null
       }
       this.controls.update()
+      // la caméra reste au-dessus du relief : jamais sous le sol des pentes ni dans une montagne
+      const cam = this.camera.position, mini = this.relief(cam.x, cam.z) + 4
+      if (cam.y < mini) { cam.y = mini; this.camera.lookAt(this.controls.target) }
     }
 
     this.suivreAutres(dt)
