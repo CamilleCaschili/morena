@@ -684,9 +684,10 @@ export function construireModele(shape: Shape, o: ShapeOpt, seed = 0): THREE.Gro
       break
     }
     case 'mine': {
-      const roc = new THREE.Mesh(new THREE.DodecahedronGeometry(1.7, 0), mat(0x8a8477))
+      // même roche que les montagnes : la mine est creusée dans leur pied
+      const roc = new THREE.Mesh(new THREE.DodecahedronGeometry(1.7, 0), mat(0x6f7c88))
       roc.scale.set(1.05, 0.95, 0.9); roc.position.set(0, 0.8, -0.5); f.add(ombre(roc))
-      const roc2 = new THREE.Mesh(new THREE.DodecahedronGeometry(1.0, 0), mat(0x726d62))
+      const roc2 = new THREE.Mesh(new THREE.DodecahedronGeometry(1.0, 0), mat(0x5c6773))
       roc2.position.set(-1.0, 0.5, 0.4); f.add(ombre(roc2))
       f.box(0.95, 1.25, 0.6, 0x1c1915, 0.35, 0, 0.95)
       f.box(0.14, 1.35, 0.14, 0x7c5533, -0.18, 0, 1.25); f.box(0.14, 1.35, 0.14, 0x7c5533, 0.88, 0, 1.25)

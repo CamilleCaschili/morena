@@ -17,9 +17,10 @@ interface Autre { p: Perso; cible: THREE.Vector3; yaw: number; vu: number }
 export interface Selection { index: number; id: string; chantier?: boolean }
 /** les chantiers sont numérotés après les bâtiments pour ne pas se mélanger avec leurs index */
 const INDEX_CHANTIER = 100000
-/** roche des montagnes, autour des mines et carrières creusées dans la pente */
-const matMassif = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
-matMassif.userData.partage = true
+/** roche et neige des montagnes où sont creusées les mines et carrières (comme celles du décor) */
+const matMont = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
+const matNeigeMont = new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.8, flatShading: true })
+matMont.userData.partage = true; matNeigeMont.userData.partage = true
 
 const HAUTEUR_YEUX = 1.7
 /* Niveaux de graphismes. budget : pixels dessinés au plus (au-delà l'image est légèrement agrandie) ;
@@ -265,19 +266,27 @@ export class VillageScene {
     const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c, coeur: x.coeur, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
     const chantiersParcelle = enChantier.filter(x => x.c)
     const chantiersEnceinte = enChantier.filter(x => !x.c)
-    // mines et carrières : l'entrée tournée vers la vallée, posée au niveau du sol devant elle ;
-    // l'arrière s'enfonce dans la pente, et un massif de roche fait le lien avec la montagne
-    const dansRoche = (g: THREE.Object3D, x: number, z: number, e: number) => {
+    // mines et carrières font partie de la montagne : l'entrée (ou le front de taille) est tournée vers la vallée,
+    // posée au niveau du sol, et une vraie montagne s'élève juste derrière, son pied collé à l'entrée
+    this.conesVillage = []
+    const dansRoche = (g: THREE.Object3D, id: string, x: number, z: number, e: number, graine: number) => {
       const [dx, dz] = versVallee(x, z)
       g.rotation.y = Math.atan2(dx, dz)
       g.position.set(x, hauteurSol(x + dx * 2.3 * e, z + dz * 2.3 * e) - 0.05, z)
-      // un éperon rocheux au-dessus de l'entrée, flanqué de deux épaulements qui rejoignent la pente
-      for (const [rx, ry, rz, r, sx, sy, sz] of [[0.3, 1.2, -2.7, 2.6, 1.9, 2.0, 1.5], [-2.3, 0.4, -1.7, 1.8, 1.2, 1.1, 1.1], [2.5, 0.4, -1.8, 1.7, 1.2, 1.0, 1.1], [0.2, 0.2, -1.4, 1.6, 1.6, 0.8, 1]]) {
-        const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), matMassif)
-        m.position.set(rx, ry, rz); m.scale.set(sx, sy, sz); m.rotation.y = rx
-        m.castShadow = true; m.receiveShadow = true
-        g.add(m)
-      }
+      const alea = (k: number) => { const v = Math.sin((graine * 37 + k) * 91.17) * 43758.5453; return v - Math.floor(v) }
+      // pied de la montagne : juste derrière l'encadrement de la mine, ou contre le fond de la carrière
+      const pied = (BI[id]?.shape === 'mine' ? 1.2 : -1.3) * e
+      const r = 13 + alea(1) * 5, sommetH = 46 + alea(2) * 20
+      const mx = x + dx * (pied - r), mz = z + dz * (pied - r)
+      let y = hauteurSol(mx, mz) - 2
+      for (let a = 0; a < 12; a++) y = Math.min(y, hauteurSol(mx + Math.cos(a * Math.PI / 6) * r, mz + Math.sin(a * Math.PI / 6) * r) - 1.5)
+      const h = sommetH + hauteurSol(mx, mz) - y, seg = 7, rot = Math.atan2(dx, dz) + Math.PI / seg
+      const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), matMont)
+      m.position.set(mx, y + h / 2, mz); m.rotation.y = rot; m.castShadow = true; m.receiveShadow = true
+      const kN = 0.3, n = new THREE.Mesh(new THREE.ConeGeometry(r * kN * 1.02, h * kN, seg), matNeigeMont)
+      n.position.set(mx, y + h - (h * kN) / 2 + 0.05, mz); n.rotation.y = rot
+      this.groupeBat.add(m, n)
+      this.conesVillage.push({ x: mx, z: mz, r, y, h })
     }
     parcelles.forEach(({ id, i, b, c, sc }) => {
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
@@ -294,7 +303,7 @@ export class VillageScene {
       g.position.set(x, 0, z)
       g.scale.setScalar(e)
       g.rotation.y = theta
-      if (dansLaRoche(id)) dansRoche(g, x, z, e)
+      if (dansLaRoche(id)) dansRoche(g, id, x, z, e, i + 1)
       g.userData.index = i
       g.userData.id = id
       g.updateMatrixWorld(true)
@@ -310,7 +319,7 @@ export class VillageScene {
       g.position.set(x, 0, z)
       g.scale.setScalar(ECHELLE * echelle)
       g.rotation.y = theta
-      if (dansLaRoche(id)) dansRoche(g, x, z, ECHELLE * echelle)
+      if (dansLaRoche(id)) dansRoche(g, id, x, z, ECHELLE * echelle, 500 + k)
       g.userData.index = INDEX_CHANTIER + k
       g.userData.id = id
       g.userData.chantier = true
@@ -592,10 +601,12 @@ export class VillageScene {
 
   /** sommets coniques des montagnes, pour garder la caméra au-dessus */
   private cones: { x: number; z: number; r: number; y: number; h: number }[] = []
+  /** montagnes des mines et carrières, refaites avec le village */
+  private conesVillage: { x: number; z: number; r: number; y: number; h: number }[] = []
   /** hauteur du terrain (sol et montagnes) en x, z */
   private relief(x: number, z: number) {
     let h = hauteurSol(x, z)
-    for (const c of this.cones) {
+    for (const c of [...this.cones, ...this.conesVillage]) {
       const d = Math.hypot(x - c.x, z - c.z)
       if (d < c.r) h = Math.max(h, c.y + c.h * (1 - d / c.r))
     }

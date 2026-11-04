@@ -124,23 +124,26 @@ export function calculerPlan(ordre: string[], places: Record<string, Case> = {},
       || DEHORS.filter(c => !caseVignoble(c) && !contenu.has(cleCase(c))).sort((a, b) => Math.hypot(...a) - Math.hypot(...b))[0]
     if (c) prendre(x, c)
   }
-  // 3. la production, au plus près de son coin de la carte
+  // 3. la production, au plus près de son coin de la carte ; chaque mine ou carrière a sa montagne,
+  // donc deux d'entre elles restent à trois cases l'une de l'autre
+  const roche: Case[] = [...bat, ...ch].filter(x => x.c && dansLaRoche(x.id)).map(x => x.c!)
   for (const { x, res } of prod) {
     const a = attrait(x.id, res)
     let meilleur: Case | null = null, score = Infinity
     for (const c of candidats(x.id)) {
-      if (contenu.has(cleCase(c)) || !casePermise(x.id, c)) continue
+      if (contenu.has(cleCase(c)) || !casePermise(x.id, c) || (dansLaRoche(x.id) && roche.some(r => anneau([r[0] - c[0], r[1] - c[1]]) < 3))) continue
       const s = Math.hypot(c[0] - a.p[0], c[1] - a.p[1]) + (caseVignoble(c) ? (a.vigne ? -100 : 30) : 0)
       if (s < score) { score = s; meilleur = c }
     }
-    if (meilleur) prendre(x, meilleur)
+    if (meilleur) { prendre(x, meilleur); if (dansLaRoche(x.id)) roche.push(meilleur) }
   }
   return { bat: bat.filter(x => x.c) as Plan['bat'], chantiers: ch, contenu }
 }
 
 /** Cases où l'on peut poser le bâtiment id : permises par la carte, et libres (ou partagées avec le même groupe). */
 export function casesLibres(p: Plan, id: string): Case[] {
-  return candidats(id).filter(c => casePermise(id, c) && accepte(p.contenu, id, c))
+  const roche = dansLaRoche(id) ? [...p.bat, ...p.chantiers].filter(x => x.c && dansLaRoche(x.id)).map(x => x.c!) : []
+  return candidats(id).filter(c => casePermise(id, c) && accepte(p.contenu, id, c) && !roche.some(r => anneau([r[0] - c[0], r[1] - c[1]]) < 3))
 }
 
 /**
