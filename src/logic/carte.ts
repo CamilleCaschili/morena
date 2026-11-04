@@ -87,3 +87,10 @@ export function caseDehors(c: P) {
   if (j === BANDE.jMin - 1 || j === BANDE.jMax + 1) return false
   return horsVallee(c) < -0.6 && !caseRiviere(c) && !caseRoute(c) && Math.hypot(i, j) < 26
 }
+/** case au pied de la montagne, à cheval sur le bord de la vallée (hors des palissades) :
+ * mines et carrières y sont creusées dans la roche */
+export function casePiedMont(c: P) {
+  const [i, j] = c, d = horsVallee(c)
+  if (j >= BANDE.jMin - 1 && j <= BANDE.jMax + 1 && i >= BANDE.iMin - 3 && i <= BANDE.iMax + 5) return false
+  return d > -1.1 && d < 0.5 && !caseRiviere(c) && !caseRoute(c) && Math.hypot(i, j) < 26
+}

@@ -7,7 +7,7 @@
  * Une case choisie par les joueurs est gardée dans l'état du village (places, ou chantier.place).
  */
 import { BI, type Shape } from '../data/catalogue'
-import { caseCoeur, caseDehors, caseVignoble, SITES, type P } from './carte'
+import { caseCoeur, caseDehors, caseVignoble, casePiedMont, SITES, type P } from './carte'
 
 export type Case = [number, number]
 /** formes qui dessinent l'enceinte au lieu d'occuper une case */
@@ -17,6 +17,8 @@ const IDS_EXT = ['elevage', 'elevage_ext', 'silos', 'moulin_vent', 'moulin_eau',
 
 export const dansEnceinte = (id: string) => !!BI[id] && ENCEINTE.includes(BI[id].shape)
 export const exterieur = (id: string) => { const b = BI[id]; return !!b && (FORMES_EXT.includes(b.shape) || IDS_EXT.includes(b.id)) }
+/** mines et carrières : creusées dans la montagne, au pied des pentes */
+export const dansLaRoche = (id: string) => BI[id]?.shape === 'mine' || BI[id]?.shape === 'carriere'
 
 /** où chaque bâtiment de production préfère s'installer ; res : minerai du gisement d'une mine */
 function attrait(id: string, res?: string): { p: P; vigne?: boolean } {
@@ -72,13 +74,16 @@ export function accepte(contenu: Plan['contenu'], id: string, c: Case) {
   return !!g && x.g === g.g && x.n < x.cap
 }
 /** La carte permet-elle ce bâtiment sur cette case ? */
-export const casePermise = (id: string, c: Case) => exterieur(id) ? caseDehors(c) && (caseVignoble(c) ? attrait(id).vigne === true : true) : caseCoeur(c)
+export const casePermise = (id: string, c: Case) => dansLaRoche(id) ? casePiedMont(c)
+  : exterieur(id) ? caseDehors(c) && (caseVignoble(c) ? attrait(id).vigne === true : true) : caseCoeur(c)
 
 const ZONE: Case[] = []
 for (let i = -26; i <= 26; i++) for (let j = -26; j <= 26; j++) ZONE.push([i, j])
 // le cœur se remplit en partant de la place, rangée par rangée
 const SPIRALE = ZONE.filter(c => caseCoeur(c)).sort((a, b) => anneau(a) - anneau(b) || Math.atan2(a[1], a[0]) - Math.atan2(b[1], b[0]))
 const DEHORS = ZONE.filter(c => caseDehors(c))
+const PIED = ZONE.filter(c => casePiedMont(c))
+const candidats = (id: string) => dansLaRoche(id) ? PIED : exterieur(id) ? DEHORS : SPIRALE
 
 export interface ChantierPlan { id: string; place?: Case; gisement?: string }
 /** gisements : pour savoir de quel minerai est la mine d'un chantier */
@@ -123,7 +128,7 @@ export function calculerPlan(ordre: string[], places: Record<string, Case> = {},
   for (const { x, res } of prod) {
     const a = attrait(x.id, res)
     let meilleur: Case | null = null, score = Infinity
-    for (const c of DEHORS) {
+    for (const c of candidats(x.id)) {
       if (contenu.has(cleCase(c)) || !casePermise(x.id, c)) continue
       const s = Math.hypot(c[0] - a.p[0], c[1] - a.p[1]) + (caseVignoble(c) ? (a.vigne ? -100 : 30) : 0)
       if (s < score) { score = s; meilleur = c }
@@ -135,7 +140,7 @@ export function calculerPlan(ordre: string[], places: Record<string, Case> = {},
 
 /** Cases où l'on peut poser le bâtiment id : permises par la carte, et libres (ou partagées avec le même groupe). */
 export function casesLibres(p: Plan, id: string): Case[] {
-  return (exterieur(id) ? DEHORS : SPIRALE).filter(c => casePermise(id, c) && accepte(p.contenu, id, c))
+  return candidats(id).filter(c => casePermise(id, c) && accepte(p.contenu, id, c))
 }
 
 /**

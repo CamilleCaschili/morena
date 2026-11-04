@@ -5,9 +5,9 @@ import { BI } from '../data/catalogue'
 import { construireLigne, demiPorte, ECHELLE, ENCEINTE, matFenetre, matEau, rayon, appliquerSaison, teinteSaison, NEIGE } from './batiments'
 import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
-import { cleCase, sousCase, type Case, type Plan } from '../logic/plan'
-import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, horsVallee, distLigne, dansPolygone, type P } from '../logic/carte'
-import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, COURS, S } from './terrain'
+import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
+import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, horsVallee, casePiedMont, distLigne, dansPolygone, type P } from '../logic/carte'
+import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, COURS, S } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -17,6 +17,9 @@ interface Autre { p: Perso; cible: THREE.Vector3; yaw: number; vu: number }
 export interface Selection { index: number; id: string; chantier?: boolean }
 /** les chantiers sont numérotés après les bâtiments pour ne pas se mélanger avec leurs index */
 const INDEX_CHANTIER = 100000
+/** roche des montagnes, autour des mines et carrières creusées dans la pente */
+const matMassif = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
+matMassif.userData.partage = true
 
 const HAUTEUR_YEUX = 1.7
 /* Niveaux de graphismes. budget : pixels dessinés au plus (au-delà l'image est légèrement agrandie) ;
@@ -262,19 +265,36 @@ export class VillageScene {
     const enChantier = plan.chantiers.map(x => ({ id: x.id, k: x.k, b: BI[x.id], c: x.c, coeur: x.coeur, sc: sousCase(x.s, x.cap) })).filter(x => x.b)
     const chantiersParcelle = enChantier.filter(x => x.c)
     const chantiersEnceinte = enChantier.filter(x => !x.c)
+    // mines et carrières : l'entrée tournée vers la vallée, posée au niveau du sol devant elle ;
+    // l'arrière s'enfonce dans la pente, et un massif de roche fait le lien avec la montagne
+    const dansRoche = (g: THREE.Object3D, x: number, z: number, e: number) => {
+      const [dx, dz] = versVallee(x, z)
+      g.rotation.y = Math.atan2(dx, dz)
+      g.position.set(x, hauteurSol(x + dx * 2.3 * e, z + dz * 2.3 * e) - 0.05, z)
+      // un éperon rocheux au-dessus de l'entrée, flanqué de deux épaulements qui rejoignent la pente
+      for (const [rx, ry, rz, r, sx, sy, sz] of [[0.3, 1.2, -2.7, 2.6, 1.9, 2.0, 1.5], [-2.3, 0.4, -1.7, 1.8, 1.2, 1.1, 1.1], [2.5, 0.4, -1.8, 1.7, 1.2, 1.0, 1.1], [0.2, 0.2, -1.4, 1.6, 1.6, 0.8, 1]]) {
+        const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), matMassif)
+        m.position.set(rx, ry, rz); m.scale.set(sx, sy, sz); m.rotation.y = rx
+        m.castShadow = true; m.receiveShadow = true
+        g.add(m)
+      }
+    }
     parcelles.forEach(({ id, i, b, c, sc }) => {
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
       const x = (c[0] + sc.dx) * S, z = (c[1] + sc.dz) * S, e = ECHELLE * sc.echelle
       const theta = (c[0] === 0 && c[1] === 0) ? 0 : Math.round(Math.atan2(-c[0], -c[1]) / (Math.PI / 2)) * (Math.PI / 2)
-      // terrain battu sous le bâtiment
-      const lot = new THREE.Mesh(new THREE.PlaneGeometry(4.6 * e, 4.6 * e), matsLot[i % 3 === 0 ? 0 : 1])
-      lot.rotation.x = -Math.PI / 2; lot.position.set(x, 0.015, z); lot.receiveShadow = true
-      this.groupeBat.add(lot)
+      // terrain battu sous le bâtiment (pas dans la roche)
+      if (!dansLaRoche(id)) {
+        const lot = new THREE.Mesh(new THREE.PlaneGeometry(4.6 * e, 4.6 * e), matsLot[i % 3 === 0 ? 0 : 1])
+        lot.rotation.x = -Math.PI / 2; lot.position.set(x, 0.015, z); lot.receiveShadow = true
+        this.groupeBat.add(lot)
+      }
 
       const g = construireBatiment(id, i + 1)
       g.position.set(x, 0, z)
       g.scale.setScalar(e)
       g.rotation.y = theta
+      if (dansLaRoche(id)) dansRoche(g, x, z, e)
       g.userData.index = i
       g.userData.id = id
       g.updateMatrixWorld(true)
@@ -290,6 +310,7 @@ export class VillageScene {
       g.position.set(x, 0, z)
       g.scale.setScalar(ECHELLE * echelle)
       g.rotation.y = theta
+      if (dansLaRoche(id)) dansRoche(g, x, z, ECHELLE * echelle)
       g.userData.index = INDEX_CHANTIER + k
       g.userData.id = id
       g.userData.chantier = true
@@ -641,7 +662,9 @@ export class VillageScene {
       const x = gx + (alea(k) - 0.5) * pasM, z = gz + (alea(k + 900) - 0.5) * pasM
       const d = horsVallee(versCase(x, z))
       if (d < 1.6 || (d > 14 && alea(k + 55) < 0.55)) continue
-      const r = 16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9
+      // près de la vallée, la base ne déborde pas sur le fond plat : les mines et carrières creusées
+      // au pied des pentes restent visibles ; plus loin, les montagnes s'élargissent
+      const r = Math.min(16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9, Math.max(7, (d - 0.5) * S))
       // la base descend jusqu'au point le plus bas du sol sous la montagne (côté vallée, la pente
       // est bien plus basse qu'au centre) : rien ne flotte ; le sommet garde sa hauteur
       let y = hauteurSol(x, z, d) - 4
@@ -670,7 +693,8 @@ export class VillageScene {
       const x = (alea(k * 3 + 1) - 0.5) * 420, z = (alea(k * 3 + 2) - 0.5) * 420
       const cs = versCase(x, z), d = horsVallee(cs)
       // au pied des pentes et sur le bas des versants, là où l'on ne construit pas
-      const pente = d > -0.5 && d < 3
+      // (pas devant l'entrée des mines et carrières, au pied des pentes)
+      const pente = d > -0.5 && d < 3 && !casePiedMont([Math.round(cs[0]), Math.round(cs[1])])
       const bosquet = d < -1.5 && Math.hypot(cs[0], cs[1]) > 17 && !dansPolygone(cs, CHAMPS) && alea(k + 77) < 0.18
       if ((!pente && !bosquet) || degage(x, z) || distRiviereLisse(x, z) < 5) continue
       const s = 0.8 + alea(k * 3 + 3) * 0.8, yh = hauteurSol(x, z, d)

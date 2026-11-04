@@ -118,3 +118,10 @@ export function hauteurSol(x: number, z: number, d = horsVallee([x / S, z / S]))
   // les pentes montent vite dès le bord de la vallée : on se sent enclavé entre les montagnes
   return lisse(d / 3.5) * 34 + lisse(d / 12) * 26 + lisse(d / 2) * bosses
 }
+/** direction (unitaire) qui descend vers le fond de la vallée, en x, z */
+export function versVallee(x: number, z: number): [number, number] {
+  const e = 0.25, cx = x / S, cz = z / S
+  const gx = horsVallee([cx + e, cz]) - horsVallee([cx - e, cz]), gz = horsVallee([cx, cz + e]) - horsVallee([cx, cz - e])
+  const l = Math.hypot(gx, gz) || 1
+  return [-gx / l, -gz / l]
+}
