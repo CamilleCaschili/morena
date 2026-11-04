@@ -7,7 +7,7 @@ import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
 import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
 import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
-import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, COURS, S } from './terrain'
+import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, serpenter, adoucir, COURS, S } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -531,16 +531,20 @@ export class VillageScene {
     }
     const LT = 1.3
     const chemins = fusionLignes(terre)
+    // les chemins serpentent un peu ; un disque de terre arrondit chaque virage et chaque croisement
+    const virages = new Map<string, [number, number]>()
     for (const { horizontal, pos, a, b } of chemins) {
-      const lg = b - a + LT, m = (a + b) / 2
-      const ch = new THREE.Mesh(new THREE.PlaneGeometry(horizontal ? lg : LT, horizontal ? LT : lg), matTerre)
-      ch.rotation.x = -Math.PI / 2
-      ch.position.set(horizontal ? m : pos, 0.008, horizontal ? pos : m)
-      ch.receiveShadow = true
-      this.groupeBat.add(ch)
+      const p0: [number, number] = horizontal ? [a, pos] : [pos, a], p1: [number, number] = horizontal ? [b, pos] : [pos, b]
+      this.groupeBat.add(ruban(serpenter(p0, p1), LT, matTerre, 0.008))
+      for (const p of [p0, p1]) virages.set(p[0].toFixed(1) + ',' + p[1].toFixed(1), p)
     }
-    // routes de terre : vers les plaines au sud-ouest, vers les mines au nord
-    const routes = [ROUTE_PLAINES, ROUTE_NORD].map(r => r.map(([x, z]) => [x * S, z * S] as [number, number]))
+    for (const [x, z] of virages.values()) {
+      const d = new THREE.Mesh(new THREE.CircleGeometry(LT * 0.62, 12), matTerre)
+      d.rotation.x = -Math.PI / 2; d.position.set(x, 0.0085, z); d.receiveShadow = true
+      this.groupeBat.add(d)
+    }
+    // routes de terre : vers les plaines au sud-ouest, vers les mines au nord ; en courbes douces
+    const routes = [ROUTE_PLAINES, ROUTE_NORD].map(r => adoucir(r.map(([x, z]) => [x * S, z * S] as [number, number])))
     for (const r of routes) this.groupeBat.add(ruban(r, 2.4, matTerre, 0.009))
 
     // ── ponts là où une rue, un chemin ou une route franchit la rivière ──

@@ -88,6 +88,33 @@ export function ruban(pts: [number, number][], largeur: number, mat: THREE.Mater
   return m
 }
 
+/**
+ * Tracé un peu sinueux de a à b (chemins de terre) : un écart latéral de quelques dizaines de centimètres,
+ * qui retombe à zéro aux deux bouts pour que les chemins se raccordent toujours.
+ */
+export function serpenter(a: [number, number], b: [number, number], amp = 0.7): [number, number][] {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1])
+  if (L < 0.01) return [a, b]
+  const ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L, ph = a[0] * 0.37 + a[1] * 0.61 + b[0] * 0.13 + b[1] * 0.29
+  const n = Math.max(2, Math.ceil(L / 1.5)), out: [number, number][] = []
+  for (let k = 0; k <= n; k++) {
+    const t = L * k / n, env = Math.min(1, t / 3, (L - t) / 3)
+    const o = amp * env * (0.65 * Math.sin(t * 0.3 + ph) + 0.35 * Math.sin(t * 0.83 + ph * 1.7))
+    out.push([a[0] + ux * t - uz * o, a[1] + uz * t + ux * o])
+  }
+  return out
+}
+/** Ligne brisée adoucie (routes) : courbe lisse qui passe par les points, avec un léger serpentement. */
+export function adoucir(pts: [number, number][], amp = 0.9): [number, number][] {
+  const c = new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), false, 'centripetal')
+  const L = c.getLength(), n = Math.max(2, Math.ceil(L / 1.5))
+  return c.getSpacedPoints(n).map((v, k) => {
+    const t = L * k / n, tg = c.getTangentAt(k / n), env = Math.min(1, t / 4)
+    const o = amp * env * Math.sin(t * 0.21 + 1.3)
+    return [v.x - tg.z * o, v.z + tg.x * o]
+  })
+}
+
 /* ── Pont de bois : tablier, garde-corps, poteaux ; le long de x ── */
 const matPlanche = new THREE.MeshStandardMaterial({ color: 0x7c5533, roughness: 0.9 })
 const matPoutre = new THREE.MeshStandardMaterial({ color: 0x5a3d26, roughness: 0.9 })

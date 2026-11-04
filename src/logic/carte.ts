@@ -11,10 +11,6 @@
 export type P = [number, number]
 
 export interface Palissade { z: number; a: number; b: number; porte: number }
-export const PALISSADES: { nord: Palissade; sud: Palissade } = {
-  nord: { z: -5.5, a: -8.5, b: 5.5, porte: 1.5 },
-  sud: { z: 5.5, a: -8, b: 8.5, porte: -2.5 },
-}
 /** rangées de cases entre les palissades : le cœur du village */
 export const BANDE = { jMin: -5, jMax: 5, iMin: -8, iMax: 8 }
 
@@ -61,6 +57,14 @@ export function horsVallee(p: P) {
   for (let i = 0; i < VALLEE.length; i++) d = Math.min(d, distSegment(p, VALLEE[i], VALLEE[(i + 1) % VALLEE.length]))
   return dansPolygone(p, VALLEE) ? -d : d
 }
+/** Deux palissades barrent la vallée d'un bord à l'autre : elles s'enfoncent dans les montagnes de chaque côté. */
+function bord(z: number, depart: number, sens: 1 | -1) {
+  let x = depart
+  while (horsVallee([x, z]) < 0.8 && Math.abs(x) < 40) x += sens * 0.1
+  return x
+}
+const palissade = (z: number, porte: number): Palissade => ({ z, porte, a: bord(z, porte, -1), b: bord(z, porte, 1) })
+export const PALISSADES: { nord: Palissade; sud: Palissade } = { nord: palissade(-5.5, 1.5), sud: palissade(5.5, -2.5) }
 export const distRiviere = (p: P) => Math.min(distLigne(p, RIVIERE), distLigne(p, AFFLUENT))
 
 /* ── Cases ── */
