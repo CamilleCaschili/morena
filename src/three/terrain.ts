@@ -3,11 +3,10 @@
  * et les outils pour tracer rues et chemins le long des bords des cases.
  */
 import * as THREE from 'three'
-import { ECHELLE } from './batiments'
-import { RIVIERE, AFFLUENT, LARGEUR_RIVIERE, horsVallee, type P } from '../logic/carte'
+import { RIVIERE, AFFLUENT, LARGEUR_RIVIERE, TAILLE_CASE, horsVallee, type P } from '../logic/carte'
 
 /** écart entre deux cases du plan */
-export const S = 5.4 * ECHELLE
+export const S = TAILLE_CASE
 
 /* ── Rivière lissée (unités 3D) ── */
 function lisser(pts: P[]): [number, number][] {

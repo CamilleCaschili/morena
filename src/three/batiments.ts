@@ -699,15 +699,7 @@ export function construireModele(shape: Shape, o: ShapeOpt, seed = 0): THREE.Gro
       break
     }
     case 'carriere': {
-      // front de taille creusé dans le flanc de la montagne (qui s'élève juste derrière, voir scene.ts) :
-      // des gradins de pierre fraîchement taillée, plus clairs que la roche, qui montent dans la pente
-      // chaque gradin recule comme la pente de la montagne : ils dépassent tous d'une même petite banquette
-      for (let k = 0; k < 5; k++) {
-        const front = -0.3 * k, larg = 3.6 - 0.25 * k
-        f.box(larg, 1.0, 2.2, k % 2 ? 0xa9a397 : 0xbab5aa, 0, k * 1.0, front - 1.1)
-        // arête du gradin, un peu plus sombre
-        f.box(larg, 0.08, 0.08, 0x8f897d, 0, k * 1.0 + 0.96, front - 0.04)
-      }
+      // le front de taille (gradins) est taillé dans le flanc de la montagne par la scène (scene.ts)
       // carreau de la carrière : gravier, blocs taillés, échelle et chèvre de levage
       const carreau = f.box(3.8, 0.04, 2.2, 0xa39e92, 0, 0, 1.4); carreau.castShadow = false
       for (const [x, z, r] of [[-1.2, 1.3, 0.1], [-0.4, 1.7, -0.2], [0.9, 1.4, 0.3], [-1.0, 2.0, 0.5]]) f.box(0.55, 0.42, 0.4, 0xc9c4b9, x, 0, z).rotation.y = r

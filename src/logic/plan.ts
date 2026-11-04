@@ -124,15 +124,21 @@ export function calculerPlan(ordre: string[], places: Record<string, Case> = {},
       || DEHORS.filter(c => !caseVignoble(c) && !contenu.has(cleCase(c))).sort((a, b) => Math.hypot(...a) - Math.hypot(...b))[0]
     if (c) prendre(x, c)
   }
-  // 3. la production, au plus près de son coin de la carte ; chaque mine ou carrière a sa montagne,
-  // donc deux d'entre elles restent à trois cases l'une de l'autre
+  // 3. la production, au plus près de son coin de la carte ; deux mines ou carrières creusées
+  // dans le même flanc gardent une case d'écart
   const roche: Case[] = [...bat, ...ch].filter(x => x.c && dansLaRoche(x.id)).map(x => x.c!)
   for (const { x, res } of prod) {
     const a = attrait(x.id, res)
     let meilleur: Case | null = null, score = Infinity
     for (const c of candidats(x.id)) {
-      if (contenu.has(cleCase(c)) || !casePermise(x.id, c) || (dansLaRoche(x.id) && roche.some(r => anneau([r[0] - c[0], r[1] - c[1]]) < 3))) continue
+      if (contenu.has(cleCase(c)) || !casePermise(x.id, c) || (dansLaRoche(x.id) && roche.some(r => anneau([r[0] - c[0], r[1] - c[1]]) < 2))) continue
       const s = Math.hypot(c[0] - a.p[0], c[1] - a.p[1]) + (caseVignoble(c) ? (a.vigne ? -100 : 30) : 0)
+      if (s < score) { score = s; meilleur = c }
+    }
+    // aucune case au pied d'une montagne : la mine ou la carrière prend une case ordinaire hors des murs
+    if (!meilleur && dansLaRoche(x.id)) for (const c of DEHORS) {
+      if (contenu.has(cleCase(c)) || caseVignoble(c)) continue
+      const s = Math.hypot(c[0] - a.p[0], c[1] - a.p[1])
       if (s < score) { score = s; meilleur = c }
     }
     if (meilleur) { prendre(x, meilleur); if (dansLaRoche(x.id)) roche.push(meilleur) }
@@ -143,7 +149,7 @@ export function calculerPlan(ordre: string[], places: Record<string, Case> = {},
 /** Cases où l'on peut poser le bâtiment id : permises par la carte, et libres (ou partagées avec le même groupe). */
 export function casesLibres(p: Plan, id: string): Case[] {
   const roche = dansLaRoche(id) ? [...p.bat, ...p.chantiers].filter(x => x.c && dansLaRoche(x.id)).map(x => x.c!) : []
-  return candidats(id).filter(c => casePermise(id, c) && accepte(p.contenu, id, c) && !roche.some(r => anneau([r[0] - c[0], r[1] - c[1]]) < 3))
+  return candidats(id).filter(c => casePermise(id, c) && accepte(p.contenu, id, c) && !roche.some(r => anneau([r[0] - c[0], r[1] - c[1]]) < 2))
 }
 
 /**

@@ -87,10 +87,48 @@ export function caseDehors(c: P) {
   if (j === BANDE.jMin - 1 || j === BANDE.jMax + 1) return false
   return horsVallee(c) < -0.6 && !caseRiviere(c) && !caseRoute(c) && Math.hypot(i, j) < 26
 }
-/** case au pied de la montagne, à cheval sur le bord de la vallée (hors des palissades) :
- * mines et carrières y sont creusées dans la roche */
+/* ── Montagnes autour de la vallée ── */
+/** côté d'une case en unités 3D (S dans three/terrain.ts) */
+export const TAILLE_CASE = 5.4 * 1.6
+/** un sommet conique : centre et rayon de base en cases ; seg, rot : facettes du cône ; k : graine du dessin */
+export interface Montagne { x: number; z: number; r: number; d: number; k: number; seg: number; rot: number }
+const alea = (k: number) => { const x = Math.sin(k * 91.17 + 3.3) * 43758.5453; return x - Math.floor(x) }
+/** serrées et hautes au bord de la vallée, plus espacées au loin */
+export const MONTAGNES: Montagne[] = (() => {
+  const T = TAILLE_CASE, pas = 17, out: Montagne[] = []
+  let k = 0
+  for (let gx = -420; gx <= 420; gx += pas) for (let gz = -420; gz <= 420; gz += pas) {
+    k++
+    const x = gx + (alea(k) - 0.5) * pas, z = gz + (alea(k + 900) - 0.5) * pas
+    const d = horsVallee([x / T, z / T])
+    if (d < 1.6 || (d > 14 && alea(k + 55) < 0.55)) continue
+    // les plus proches descendent jusqu'au fond de la vallée : mines et carrières s'y ouvrent au niveau du sol
+    const r = Math.min(16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9, Math.max(7, (d - 0.1) * T))
+    out.push({ x: x / T, z: z / T, r: r / T, d, k, seg: 6 + Math.floor(alea(k + 3) * 3), rot: alea(k + 21) * Math.PI })
+  }
+  return out
+})()
+/** montagne dont le flanc passe tout contre la case (à moins d'une demi-case), ou null */
+export function montagneContre([i, j]: P): Montagne | null {
+  let m: Montagne | null = null, best = Infinity
+  for (const x of MONTAGNES) {
+    if (Math.abs(x.x - i) > 8 || Math.abs(x.z - j) > 8) continue
+    // distance au flanc : le cône est à facettes, sa face est un peu en retrait du cercle de base
+    const ecart = Math.hypot(x.x - i, x.z - j) - x.r * 0.88
+    // pas plus d'une demi-case : la mine glisse alors à peine pour s'adosser au flanc, sans monter haut dans la pente
+    if (!(ecart > -0.5 && ecart < 0.6 && Math.abs(ecart - 0.1) < best) || x.r < 1.0) continue
+    // pas dans le creux entre deux montagnes : le pied du flanc doit être dégagé de ses voisines
+    const l = Math.hypot(i - x.x, j - x.z) || 1, px = x.x + (i - x.x) / l * x.r * 0.88, pz = x.z + (j - x.z) / l * x.r * 0.88
+    if (MONTAGNES.some(o => o !== x && Math.abs(o.x - px) < 8 && Math.abs(o.z - pz) < 8 && Math.hypot(o.x - px, o.z - pz) < o.r * 0.95)) continue
+    best = Math.abs(ecart - 0.1); m = x
+  }
+  return m
+}
+/** case au pied d'une montagne, à cheval sur le bord de la vallée (hors des palissades) :
+ * mines et carrières y sont creusées dans le flanc */
 export function casePiedMont(c: P) {
   const [i, j] = c, d = horsVallee(c)
   if (j >= BANDE.jMin - 1 && j <= BANDE.jMax + 1 && i >= BANDE.iMin - 3 && i <= BANDE.iMax + 5) return false
-  return d > -1.1 && d < 0.5 && !caseRiviere(c) && !caseRoute(c) && Math.hypot(i, j) < 26
+  // tout en bas de la pente : l'entrée reste près du niveau de la vallée
+  return d > -1.2 && d < 0.45 && !caseRiviere(c) && !caseRoute(c) && Math.hypot(i, j) < 26 && montagneContre(c) !== null
 }

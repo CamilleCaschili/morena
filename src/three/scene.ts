@@ -6,7 +6,7 @@ import { construireLigne, demiPorte, ECHELLE, ENCEINTE, matFenetre, matEau, rayo
 import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
 import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
-import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, horsVallee, casePiedMont, distLigne, dansPolygone, type P } from '../logic/carte'
+import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
 import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, COURS, S } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
@@ -17,10 +17,72 @@ interface Autre { p: Perso; cible: THREE.Vector3; yaw: number; vu: number }
 export interface Selection { index: number; id: string; chantier?: boolean }
 /** les chantiers sont numérotés après les bâtiments pour ne pas se mélanger avec leurs index */
 const INDEX_CHANTIER = 100000
-/** roche et neige des montagnes où sont creusées les mines et carrières (comme celles du décor) */
-const matMont = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
-const matNeigeMont = new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.8, flatShading: true })
-matMont.userData.partage = true; matNeigeMont.userData.partage = true
+/** déblais tassés devant une mine ou une carrière */
+const matDeblais = new THREE.MeshStandardMaterial({ color: 0x8b7f68, roughness: 1, flatShading: true })
+matDeblais.userData.partage = true
+/** tas en tronc de pyramide : dessus de demi-côtés ax, az au niveau 0, flancs qui descendent de h en s'évasant */
+function tasDeblais(ax: number, az: number, h: number) {
+  const e = h * 0.9, haut = [[-ax, -az], [ax, -az], [ax, az], [-ax, az]], bas = [[-ax - e, -az - e], [ax + e, -az - e], [ax + e, az + e], [-ax - e, az + e]]
+  const p: number[] = []
+  const tri = (a: number[], b: number[], c: number[]) => p.push(...a, ...b, ...c)
+  const H = haut.map(([x, z]) => [x, 0, z]), B = bas.map(([x, z]) => [x, -h, z])
+  tri(H[0], H[2], H[1]); tri(H[0], H[3], H[2])
+  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; tri(H[i], H[j], B[j]); tri(H[i], B[j], B[i]) }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3))
+  g.computeVertexNormals()
+  return g
+}
+/** pierre fraîchement taillée des gradins de carrière, plus claire que la roche */
+// (visible des deux côtés : l'entaille est une surface qui épouse la paroi)
+const matsTaille = [0xbab5aa, 0xa9a397, 0x8f897d].map(color => { const m = new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true, side: THREE.DoubleSide }); m.userData.partage = true; return m })
+
+/* ── Montagnes du décor (logic/carte.ts) en 3D : base au plus bas du sol sous elles, sommet au-dessus ── */
+interface Cone { x: number; z: number; r: number; y: number; h: number; seg: number; rot: number; k: number }
+let CONES: Cone[] | null = null
+function cones(): Cone[] {
+  if (CONES) return CONES
+  const alea = (k: number) => { const x = Math.sin(k * 91.17 + 3.3) * 43758.5453; return x - Math.floor(x) }
+  CONES = MONTAGNES.map(m => {
+    const x = m.x * S, z = m.z * S, r = m.r * S, k = m.k
+    // la base descend au point le plus bas du sol sous la montagne (côté vallée) : rien ne flotte
+    let y = hauteurSol(x, z, m.d) - 4
+    const sommet = y + 42 + alea(k + 13) * 46 + Math.min(m.d, 10) * 3
+    for (let a = 0; a < 12; a++) for (const f of [0.55, 1]) y = Math.min(y, hauteurSol(x + Math.cos(a * Math.PI / 6) * r * f, z + Math.sin(a * Math.PI / 6) * r * f) - 1.5)
+    return { x, z, r, y, h: sommet - y, seg: m.seg, rot: m.rot, k }
+  })
+  return CONES
+}
+/**
+ * Flanc du cône c vu depuis (x, z), au niveau du sol : point Q de la face, angle psi de la normale
+ * à cette facette, et pente q de la face (recul horizontal par unité de hauteur).
+ */
+function flanc(c: Cone, x: number, z: number) {
+  const psi = Math.atan2(x - c.x, z - c.z), pas = 2 * Math.PI / c.seg
+  // les sommets du cône sont aux angles rot + i·pas : la facette i a sa normale au milieu
+  const i = Math.floor((((psi - c.rot) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / pas)
+  const psiF = c.rot + (i + 0.5) * pas
+  const rSol = c.r * (1 - (hauteurSol(x, z) - c.y) / c.h)
+  const dist = rSol * Math.cos(Math.PI / c.seg) / Math.cos(psi - psiF)
+  // larg : largeur de la facette au niveau du sol ; lat : décalage de Q par rapport au milieu de la facette
+  return { qx: c.x + Math.sin(psi) * dist, qz: c.z + Math.cos(psi) * dist, psiF, dist, q: c.r * Math.cos(Math.PI / c.seg) / c.h,
+    larg: 2 * rSol * Math.sin(Math.PI / c.seg), lat: dist * Math.sin(psi - psiF) }
+}
+/** hauteur de la surface du cône c (à facettes, comme il est dessiné) en x, z ; −Infinity hors du cône */
+function hauteurCone(c: Cone, x: number, z: number) {
+  const d = Math.hypot(x - c.x, z - c.z)
+  if (d >= c.r) return -Infinity
+  const psi = Math.atan2(x - c.x, z - c.z), pas = 2 * Math.PI / c.seg
+  const i = Math.floor((((psi - c.rot) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / pas)
+  const t = psi - (c.rot + (i + 0.5) * pas)
+  return c.y + c.h * (1 - d * Math.cos(t) / (c.r * Math.cos(Math.PI / c.seg)))
+}
+/** flanc de la montagne contre laquelle le plan a mis la case de (x, z) (carte.ts, montagneContre), ou null */
+function flancContre(x: number, z: number) {
+  const m = montagneContre([Math.round(x / S), Math.round(z / S)])
+  const c = m && cones().find(c => c.k === m.k)
+  return c ? { ...flanc(c, x, z), c } : null
+}
 
 const HAUTEUR_YEUX = 1.7
 /* Niveaux de graphismes. budget : pixels dessinés au plus (au-delà l'image est légèrement agrandie) ;
@@ -268,41 +330,81 @@ export class VillageScene {
     const chantiersEnceinte = enChantier.filter(x => !x.c)
     // mines et carrières font partie de la montagne : l'entrée (ou le front de taille) est tournée vers la vallée,
     // posée au niveau du sol, et une vraie montagne s'élève juste derrière, son pied collé à l'entrée
-    this.conesVillage = []
-    const montagne = (mx: number, mz: number, r: number, sommetH: number, rot: number) => {
-      // base au point le plus bas du sol sous la montagne, sommet à sommetH au-dessus du sol en son centre
-      let y = hauteurSol(mx, mz) - 2
-      for (let a = 0; a < 12; a++) y = Math.min(y, hauteurSol(mx + Math.cos(a * Math.PI / 6) * r, mz + Math.sin(a * Math.PI / 6) * r) - 1.5)
-      const h = sommetH + hauteurSol(mx, mz) - y, seg = 7
-      const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), matMont)
-      m.position.set(mx, y + h / 2, mz); m.rotation.y = rot; m.castShadow = true; m.receiveShadow = true
-      const kN = 0.3, n = new THREE.Mesh(new THREE.ConeGeometry(r * kN * 1.02, h * kN, seg), matNeigeMont)
-      n.position.set(mx, y + h - (h * kN) / 2 + 0.05, mz); n.rotation.y = rot
-      this.groupeBat.add(m, n)
-      this.conesVillage.push({ x: mx, z: mz, r, y, h })
-    }
-    const dansRoche = (g: THREE.Object3D, id: string, x: number, z: number, e: number, graine: number) => {
-      const [dx, dz] = versVallee(x, z)
-      g.rotation.y = Math.atan2(dx, dz)
-      g.position.set(x, hauteurSol(x + dx * 2.3 * e, z + dz * 2.3 * e) - 0.05, z)
-      const alea = (k: number) => { const v = Math.sin((graine * 37 + k) * 91.17) * 43758.5453; return v - Math.floor(v) }
-      // repère de la mine : vers la vallée (dx, dz), et sur le côté (dz, −dx)
-      const pt = (lat: number, avant: number): [number, number] => [x + dz * lat + dx * avant, z - dx * lat + dz * avant]
-      const rot = Math.atan2(dx, dz) + Math.PI / 7
-      const r = 13 + alea(1) * 5, haut = 46 + alea(2) * 20
-      if (BI[id]?.shape === 'mine') {
-        // la montagne commence juste derrière l'encadrement : l'entrée s'ouvre dans son flanc
-        montagne(...pt(0, 1.2 * e - r), r, haut, rot)
-      } else {
-        // carrière : une entaille dans la montagne ; les gradins de taille au fond, la montagne derrière,
-        // deux épaulements rocheux de part et d'autre qui cachent les côtés des gradins
-        // pente fixe (rayon / hauteur ≈ 0,27), la même que le recul des gradins
-        const rc = 14 + alea(5) * 2
-        // (une face plane du cône regarde la carrière : elle est en retrait du cercle de base, d'où l'avancée)
-        montagne(...pt(0, 0.6 * e - rc), rc, rc / 0.27, rot)
-        const rs = 8 + alea(3) * 2
-        for (const sens of [-1, 1]) montagne(...pt(sens * (1.8 * e + rs * 0.6), -1.4 * e), rs, 30 + alea(4 + sens) * 10, rot + sens)
+    // front de taille d'une carrière, à plat sur la facette de la montagne (pente q, face en zFace au sol,
+    // unités du modèle) : une plaque de pierre fraîchement taillée et des banquettes qui dépassent à peine
+    // front de taille d'une carrière : une entaille de pierre claire qui épouse la roche, quelles que soient les
+    // montagnes qui se touchent là ; chaque point part de la vallée et avance jusqu'à rencontrer la paroi.
+    // (px, pz, y0) : pied de la carrière, (nx, nz) : vers la vallée ; deux lignes plus sombres marquent les banquettes
+    const entaille = (px: number, pz: number, y0: number, nx: number, nz: number, e: number) => {
+      const W = 11 * e / ECHELLE, H = 10 * e / ECHELLE, NU = 11, NV = 9
+      const surRoche = (u: number, y: number, sortie: number): [number, number, number] | null => {
+        let x = px + nz * u + nx * 0.5 * e, z = pz - nx * u + nz * 0.5 * e
+        for (let t = 0; t < 14 * e; t += 0.3) {
+          if (this.relief(x, z) >= y) {
+            // la paroi est entre le pas précédent (dehors) et celui-ci (dedans) : on l'affine par dichotomie
+            let a = 0, b = 0.3
+            for (let k = 0; k < 7; k++) { const m = (a + b) / 2; if (this.relief(x + nx * m, z + nz * m) >= y) a = m; else b = m }
+            return [x + nx * (b + sortie), y, z + nz * (b + sortie)]
+          }
+          x -= nx * 0.3; z -= nz * 0.3
+        }
+        return null
       }
+      const bande = (haut: (u: number) => [number, number], sortie: number, m: THREE.Material) => {
+        const grille: ([number, number, number] | null)[][] = []
+        for (let a = 0; a <= NU; a++) {
+          const u = -W / 2 + W * a / NU, [b0, b1] = haut(u), col: ([number, number, number] | null)[] = []
+          for (let b = 0; b <= NV; b++) col.push(b1 > b0 ? surRoche(u, y0 + b0 + (b1 - b0) * b / NV, sortie) : null)
+          grille.push(col)
+        }
+        const pos: number[] = []
+        for (let a = 0; a < NU; a++) for (let b = 0; b < NV; b++) {
+          const p00 = grille[a][b], p10 = grille[a + 1][b], p01 = grille[a][b + 1], p11 = grille[a + 1][b + 1]
+          if (p00 && p10 && p11) pos.push(...p00, ...p11, ...p10)
+          if (p00 && p11 && p01) pos.push(...p00, ...p01, ...p11)
+        }
+        if (!pos.length) return
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+        geo.computeVertexNormals()
+        const mesh = new THREE.Mesh(geo, m); mesh.receiveShadow = true
+        this.groupeBat.add(mesh)
+      }
+      // contour irrégulier : plus haut au milieu, des dents en haut
+      const sommet = (u: number) => H * (1 - 0.55 * (2 * u / W) ** 2) * (0.85 + 0.15 * Math.sin(u * 2.7 + 1))
+      bande(u => [0.05, sommet(u)], 0.06, matsTaille[0])
+      for (const f of [0.32, 0.62]) bande(u => sommet(u) > H * f + 0.4 ? [H * f - 0.16, H * f + 0.16] : [0, 0], 0.11, matsTaille[2])
+    }
+    // mines et carrières sont creusées dans une montagne existante : la mine ouvre son entrée dans le flanc,
+    // la carrière y taille ses gradins ; l'une comme l'autre face à la facette du cône la plus proche
+    const dansRoche = (g: THREE.Object3D, id: string, x: number, z: number, e: number, chantier = false) => {
+      const mine = BI[id]?.shape === 'mine'
+      // recul : distance de l'origine du modèle derrière la face (négatif : devant)
+      const recul = (mine ? 1.2 : -1.0) * e
+      const f = flancContre(x, z)
+      let nx: number, nz: number, px = x, pz = z
+      if (f) {
+        nx = Math.sin(f.psiF); nz = Math.cos(f.psiF)
+        // on glisse vers le milieu de la facette (au plus 0,7 case) : devant une arête du cône,
+        // la paroi fuirait des deux côtés et l'entrée ou le front de taille dépasserait
+        const g = Math.max(-0.7 * S, Math.min(0.7 * S, -f.lat))
+        px = f.qx - nx * recul + nz * g; pz = f.qz - nz * recul - nx * g
+      } else [nx, nz] = versVallee(x, z)
+      g.rotation.y = Math.atan2(nx, nz)
+      // niveau du sol au pied du flanc, là où s'ouvre l'entrée ; devant, une plate-forme de déblais
+      // rattrape la pente (sinon l'avant flotterait et l'entrée serait enterrée)
+      const faceL = recul / e, y = hauteurSol(px + nx * recul, pz + nz * recul) - 0.05
+      g.position.set(px, y, pz)
+      let bas = y
+      for (const lx of [-2.6, 0, 2.6]) for (const lz of [faceL, (faceL + 3.2) / 2, 3.2])
+        bas = Math.min(bas, hauteurSol(px + (nz * lx + nx * lz) * e, pz + (-nx * lx + nz * lz) * e))
+      const h = (y - bas) / e + 0.3
+      if (h > 0.4) {
+        const tas = new THREE.Mesh(tasDeblais(2.6, (3.2 - faceL) / 2, h), matDeblais)
+        tas.position.set(0, 0.01, (faceL + 3.2) / 2); tas.castShadow = true; tas.receiveShadow = true
+        g.add(tas)
+      }
+      if (!mine && !chantier) entaille(px, pz, y, nx, nz, e)
     }
     parcelles.forEach(({ id, i, b, c, sc }) => {
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
@@ -319,14 +421,15 @@ export class VillageScene {
       g.position.set(x, 0, z)
       g.scale.setScalar(e)
       g.rotation.y = theta
-      if (dansLaRoche(id)) dansRoche(g, id, x, z, e, i + 1)
+      if (dansLaRoche(id)) dansRoche(g, id, x, z, e)
       g.userData.index = i
       g.userData.id = id
       g.updateMatrixWorld(true)
       for (const p of g.userData.smoke as THREE.Vector3[]) this.emetteurs.push({ p: g.localToWorld(p.clone()), t: Math.random() * 2 })
       this.rotatifs.push(...(g.userData.spin as THREE.Object3D[]))
+      // (une mine ou une carrière a pu glisser contre le flanc de sa montagne)
       const r = rayon(b.shape) * e
-      if (r) this.collisions.push({ x, z, r })
+      if (r) this.collisions.push({ x: g.position.x, z: g.position.z, r })
       this.groupeBat.add(g)
       this.cliquables.push(g)
     })
@@ -335,11 +438,11 @@ export class VillageScene {
       g.position.set(x, 0, z)
       g.scale.setScalar(ECHELLE * echelle)
       g.rotation.y = theta
-      if (dansLaRoche(id)) dansRoche(g, id, x, z, ECHELLE * echelle, 500 + k)
+      if (dansLaRoche(id)) dansRoche(g, id, x, z, ECHELLE * echelle, true)
       g.userData.index = INDEX_CHANTIER + k
       g.userData.id = id
       g.userData.chantier = true
-      this.collisions.push({ x, z, r: 1.4 * ECHELLE * echelle })
+      this.collisions.push({ x: g.position.x, z: g.position.z, r: 1.4 * ECHELLE * echelle })
       this.groupeBat.add(g)
       this.cliquables.push(g)
     }
@@ -615,17 +718,10 @@ export class VillageScene {
     }
   }
 
-  /** sommets coniques des montagnes, pour garder la caméra au-dessus */
-  private cones: { x: number; z: number; r: number; y: number; h: number }[] = []
-  /** montagnes des mines et carrières, refaites avec le village */
-  private conesVillage: { x: number; z: number; r: number; y: number; h: number }[] = []
-  /** hauteur du terrain (sol et montagnes) en x, z */
+  /** hauteur du terrain (sol et montagnes) en x, z : la caméra reste au-dessus */
   private relief(x: number, z: number) {
     let h = hauteurSol(x, z)
-    for (const c of [...this.cones, ...this.conesVillage]) {
-      const d = Math.hypot(x - c.x, z - c.z)
-      if (d < c.r) h = Math.max(h, c.y + c.h * (1 - d / c.r))
-    }
+    for (const c of cones()) if (Math.abs(c.x - x) < c.r && Math.abs(c.z - z) < c.r) h = Math.max(h, hauteurCone(c, x, z))
     return h
   }
 
@@ -680,31 +776,13 @@ export class VillageScene {
     const matRoche = new THREE.MeshStandardMaterial({ color: 0x6f7c88, roughness: 1, flatShading: true })
     const matRoche2 = new THREE.MeshStandardMaterial({ color: 0x5c6773, roughness: 1, flatShading: true })
     const matNeige = new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.8, flatShading: true })
-    // serrées et hautes au bord de la vallée, plus espacées au loin
-    const pasM = empl.includes('M') ? 17 : 21
-    this.cones = []
-    let k = 0
-    for (let gx = -420; gx <= 420; gx += pasM) for (let gz = -420; gz <= 420; gz += pasM) {
-      k++
-      const x = gx + (alea(k) - 0.5) * pasM, z = gz + (alea(k + 900) - 0.5) * pasM
-      const d = horsVallee(versCase(x, z))
-      if (d < 1.6 || (d > 14 && alea(k + 55) < 0.55)) continue
-      // près de la vallée, la base ne déborde pas sur le fond plat : les mines et carrières creusées
-      // au pied des pentes restent visibles ; plus loin, les montagnes s'élargissent
-      const r = Math.min(16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9, Math.max(7, (d - 0.5) * S))
-      // la base descend jusqu'au point le plus bas du sol sous la montagne (côté vallée, la pente
-      // est bien plus basse qu'au centre) : rien ne flotte ; le sommet garde sa hauteur
-      let y = hauteurSol(x, z, d) - 4
-      const sommet = y + 42 + alea(k + 13) * 46 + Math.min(d, 10) * 3
-      for (let a = 0; a < 12; a++) for (const f of [0.55, 1]) y = Math.min(y, hauteurSol(x + Math.cos(a * Math.PI / 6) * r * f, z + Math.sin(a * Math.PI / 6) * r * f) - 1.5)
-      const h = sommet - y
-      const seg = 6 + Math.floor(alea(k + 3) * 3), rot = alea(k + 21) * Math.PI
-      this.cones.push({ x, z, r, y, h })
-      const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), k % 2 ? matRoche : matRoche2)
-      m.position.set(x, y + h / 2, z); m.rotation.y = rot
+    // les montagnes de la carte (carte.ts) : serrées et hautes au bord de la vallée, plus espacées au loin
+    for (const c of cones()) {
+      const m = new THREE.Mesh(new THREE.ConeGeometry(c.r, c.h, c.seg), c.k % 2 ? matRoche : matRoche2)
+      m.position.set(c.x, c.y + c.h / 2, c.z); m.rotation.y = c.rot
       const kN = 0.34
-      const n = new THREE.Mesh(new THREE.ConeGeometry(r * kN * 1.02, h * kN, seg), matNeige)
-      n.position.set(x, y + h - (h * kN) / 2 + 0.05, z); n.rotation.y = rot
+      const n = new THREE.Mesh(new THREE.ConeGeometry(c.r * kN * 1.02, c.h * kN, c.seg), matNeige)
+      n.position.set(c.x, c.y + c.h - (c.h * kN) / 2 + 0.05, c.z); n.rotation.y = c.rot
       this.groupeDecor.add(m, n)
     }
 
