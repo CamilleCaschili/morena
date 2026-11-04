@@ -6,7 +6,7 @@ import { construireLigne, demiPorte, ECHELLE, ENCEINTE, matFenetre, matEau, rayo
 import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
 import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
-import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
+import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, ESPACEMENT, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
 import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, serpenter, adoucir, COURS, S } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
@@ -47,7 +47,7 @@ function cones(): Cone[] {
     const x = m.x * S, z = m.z * S, r = m.r * S, k = m.k
     // la base descend au point le plus bas du sol sous la montagne (côté vallée) : rien ne flotte
     let y = hauteurSol(x, z, m.d) - 4
-    const sommet = y + 42 + alea(k + 13) * 46 + Math.min(m.d, 10) * 3
+    const sommet = y + (42 + alea(k + 13) * 46 + Math.min(m.d, 10) * 3) * ESPACEMENT
     for (let a = 0; a < 12; a++) for (const f of [0.55, 1]) y = Math.min(y, hauteurSol(x + Math.cos(a * Math.PI / 6) * r * f, z + Math.sin(a * Math.PI / 6) * r * f) - 1.5)
     return { x, z, r, y, h: sommet - y, seg: m.seg, rot: m.rot, k }
   })
@@ -256,7 +256,7 @@ export class VillageScene {
     this.controls.maxPolarAngle = 1.38
     this.controls.minDistance = 6
     // au-delà, la caméra serait dans les montagnes qui entourent la vallée
-    this.controls.maxDistance = 125
+    this.controls.maxDistance = 125 * ESPACEMENT
     this.controls.screenSpacePanning = false
 
     this.hemi = new THREE.HemisphereLight(0xcfe3f5, 0x5d6b45, 1)
@@ -267,7 +267,7 @@ export class VillageScene {
     this.soleil.shadow.bias = -0.0004
     this.soleil.shadow.normalBias = 0.03
     this.scene.add(this.soleil, this.soleil.target)
-    this.scene.fog = new THREE.Fog(0x9cc3e0, 90, 320)
+    this.scene.fog = new THREE.Fog(0x9cc3e0, 90 * ESPACEMENT, 320 * ESPACEMENT)
 
     this.scene.add(this.groupeDecor, this.groupeBat)
 
@@ -531,17 +531,40 @@ export class VillageScene {
     }
     const LT = 1.3
     const chemins = fusionLignes(terre)
-    // les chemins serpentent un peu ; un disque de terre arrondit chaque virage et chaque croisement
-    const virages = new Map<string, [number, number]>()
-    for (const { horizontal, pos, a, b } of chemins) {
+    // les chemins serpentent au hasard ; chaque virage est un arc de cercle, chaque croisement une petite placette
+    type Bout = { i: number; fin: 0 | 1; d: [number, number] }
+    const noeuds = new Map<string, { p: [number, number]; bouts: Bout[] }>()
+    const bouts = chemins.map(({ horizontal, pos, a, b }, i) => {
       const p0: [number, number] = horizontal ? [a, pos] : [pos, a], p1: [number, number] = horizontal ? [b, pos] : [pos, b]
-      this.groupeBat.add(ruban(serpenter(p0, p1), LT, matTerre, 0.008))
-      for (const p of [p0, p1]) virages.set(p[0].toFixed(1) + ',' + p[1].toFixed(1), p)
+      const u: [number, number] = horizontal ? [1, 0] : [0, 1]
+      for (const [p, fin, d] of [[p0, 0, u], [p1, 1, [-u[0], -u[1]]]] as const) {
+        const k = p[0].toFixed(1) + ',' + p[1].toFixed(1)
+        const n = noeuds.get(k) ?? noeuds.set(k, { p, bouts: [] }).get(k)!
+        n.bouts.push({ i, fin, d: d as [number, number] })
+      }
+      return { p0, p1, l: Math.abs(b - a), r0: 0, r1: 0 }
+    })
+    for (const n of noeuds.values()) {
+      const [b1, b2] = n.bouts
+      if (n.bouts.length === 2 && Math.abs(b1.d[0] * b2.d[0] + b1.d[1] * b2.d[1]) < 0.1) {
+        // virage : les deux chemins s'arrêtent avant le coin, un quart de cercle les relie
+        const r = Math.min(3.2, bouts[b1.i].l * 0.45, bouts[b2.i].l * 0.45)
+        for (const x of [b1, b2]) bouts[x.i][x.fin ? 'r1' : 'r0'] = r
+        const cx = n.p[0] + (b1.d[0] + b2.d[0]) * r, cz = n.p[1] + (b1.d[1] + b2.d[1]) * r, arc: [number, number][] = []
+        for (let k = 0; k <= 8; k++) {
+          const t = k / 8 * Math.PI / 2
+          arc.push([cx - b2.d[0] * r * Math.cos(t) - b1.d[0] * r * Math.sin(t), cz - b2.d[1] * r * Math.cos(t) - b1.d[1] * r * Math.sin(t)])
+        }
+        this.groupeBat.add(ruban(arc, LT, matTerre, 0.0082))
+      } else if (n.bouts.length > 2) {
+        const d = new THREE.Mesh(new THREE.CircleGeometry(LT * 0.75, 14), matTerre)
+        d.rotation.x = -Math.PI / 2; d.position.set(n.p[0], 0.0085, n.p[1]); d.receiveShadow = true
+        this.groupeBat.add(d)
+      }
     }
-    for (const [x, z] of virages.values()) {
-      const d = new THREE.Mesh(new THREE.CircleGeometry(LT * 0.62, 12), matTerre)
-      d.rotation.x = -Math.PI / 2; d.position.set(x, 0.0085, z); d.receiveShadow = true
-      this.groupeBat.add(d)
+    for (const { p0, p1, l, r0, r1 } of bouts) {
+      const ux = (p1[0] - p0[0]) / l, uz = (p1[1] - p0[1]) / l
+      this.groupeBat.add(ruban(serpenter([p0[0] + ux * r0, p0[1] + uz * r0], [p1[0] - ux * r1, p1[1] - uz * r1], 1.1), LT, matTerre, 0.008))
     }
     // routes de terre : vers les plaines au sud-ouest, vers les mines au nord ; en courbes douces
     const routes = [ROUTE_PLAINES, ROUTE_NORD].map(r => adoucir(r.map(([x, z]) => [x * S, z * S] as [number, number])))
@@ -743,7 +766,7 @@ export class VillageScene {
 
     // sol : plat au fond de la vallée et dans les plaines, il monte vers les montagnes
     // bien plus grand que ce que la caméra peut voir, pour ne jamais apercevoir le bord ni le dessous
-    const sol = new THREE.PlaneGeometry(1400, 1400, 200, 200)
+    const sol = new THREE.PlaneGeometry(1400 * ESPACEMENT, 1400 * ESPACEMENT, 220, 220)
     sol.rotateX(-Math.PI / 2)
     const pos = sol.attributes.position as THREE.BufferAttribute
     const couleurs: number[] = [], loins = new Float32Array(pos.count)
@@ -792,14 +815,14 @@ export class VillageScene {
 
     // forêt (instanciée) : sur les pentes de la vallée, et quelques bosquets dans les plaines
     const avecForet = empl.includes('F')
-    const nbArbres = avecForet ? 800 : 400
+    const nbArbres = avecForet ? 1000 : 500
     const tronc = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.24, 1.2, 5), new THREE.MeshStandardMaterial({ color: 0x5a3d26, flatShading: true }), nbArbres)
     const bas = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 3.2, 6), new THREE.MeshStandardMaterial({ color: 0x2c573d, flatShading: true }), nbArbres)
     const haut = new THREE.InstancedMesh(new THREE.ConeGeometry(1.15, 2.4, 6), new THREE.MeshStandardMaterial({ color: 0x3a6f4f, flatShading: true }), nbArbres)
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3()
     let placés = 0
     for (let k = 0; placés < nbArbres && k < nbArbres * 8; k++) {
-      const x = (alea(k * 3 + 1) - 0.5) * 420, z = (alea(k * 3 + 2) - 0.5) * 420
+      const x = (alea(k * 3 + 1) - 0.5) * 420 * ESPACEMENT, z = (alea(k * 3 + 2) - 0.5) * 420 * ESPACEMENT
       const cs = versCase(x, z), d = horsVallee(cs)
       // au pied des pentes et sur le bas des versants, là où l'on ne construit pas
       // (pas devant l'entrée des mines et carrières, au pied des pentes)
@@ -825,7 +848,7 @@ export class VillageScene {
     // rochers épars au pied des montagnes
     const matRoc = new THREE.MeshStandardMaterial({ color: 0x8a8579, flatShading: true, roughness: 1 })
     for (let k = 0, n = 0; n < 50 && k < 400; k++) {
-      const x = (alea(k + 300) - 0.5) * 360, z = (alea(k + 400) - 0.5) * 360, d = horsVallee(versCase(x, z))
+      const x = (alea(k + 300) - 0.5) * 360 * ESPACEMENT, z = (alea(k + 400) - 0.5) * 360 * ESPACEMENT, d = horsVallee(versCase(x, z))
       if (d < 0.3 || d > 5 || degage(x, z)) continue
       const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5 + alea(k + 500) * 1.4, 0), matRoc)
       r.position.set(x, hauteurSol(x, z, d) + 0.2, z)
@@ -852,7 +875,7 @@ export class VillageScene {
 
   /* ───────── Caméra ───────── */
   cadrer() {
-    const d = this.R * 1.25 + 14
+    const d = this.R * 1.0 + 14
     this.controls.target.set(0, 0, 0)
     this.camera.position.set(d * 0.8, d * 0.75, d)
     this.controls.update()

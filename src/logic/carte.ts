@@ -92,22 +92,24 @@ export function caseDehors(c: P) {
   return horsVallee(c) < -0.6 && !caseRiviere(c) && !caseRoute(c) && Math.hypot(i, j) < 26
 }
 /* ── Montagnes autour de la vallée ── */
+/** agrandissement de toute la carte (bâtiments compris, qui eux gardent leur taille) : de l'air entre les bâtiments */
+export const ESPACEMENT = 1.35
 /** côté d'une case en unités 3D (S dans three/terrain.ts) */
-export const TAILLE_CASE = 5.4 * 1.6
+export const TAILLE_CASE = 5.4 * 1.6 * ESPACEMENT
 /** un sommet conique : centre et rayon de base en cases ; seg, rot : facettes du cône ; k : graine du dessin */
 export interface Montagne { x: number; z: number; r: number; d: number; k: number; seg: number; rot: number }
 const alea = (k: number) => { const x = Math.sin(k * 91.17 + 3.3) * 43758.5453; return x - Math.floor(x) }
 /** serrées et hautes au bord de la vallée, plus espacées au loin */
 export const MONTAGNES: Montagne[] = (() => {
-  const T = TAILLE_CASE, pas = 17, out: Montagne[] = []
+  const T = TAILLE_CASE, F = ESPACEMENT, pas = 17 * F, lim = 420 * F, out: Montagne[] = []
   let k = 0
-  for (let gx = -420; gx <= 420; gx += pas) for (let gz = -420; gz <= 420; gz += pas) {
+  for (let gx = -lim; gx <= lim; gx += pas) for (let gz = -lim; gz <= lim; gz += pas) {
     k++
     const x = gx + (alea(k) - 0.5) * pas, z = gz + (alea(k + 900) - 0.5) * pas
     const d = horsVallee([x / T, z / T])
     if (d < 1.6 || (d > 14 && alea(k + 55) < 0.55)) continue
     // les plus proches descendent jusqu'au fond de la vallée : mines et carrières s'y ouvrent au niveau du sol
-    const r = Math.min(16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9, Math.max(7, (d - 0.1) * T))
+    const r = Math.min((16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9) * F, Math.max(7 * F, (d - 0.1) * T))
     out.push({ x: x / T, z: z / T, r: r / T, d, k, seg: 6 + Math.floor(alea(k + 3) * 3), rot: alea(k + 21) * Math.PI })
   }
   return out

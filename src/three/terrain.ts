@@ -3,7 +3,7 @@
  * et les outils pour tracer rues et chemins le long des bords des cases.
  */
 import * as THREE from 'three'
-import { RIVIERE, AFFLUENT, LARGEUR_RIVIERE, TAILLE_CASE, horsVallee, type P } from '../logic/carte'
+import { RIVIERE, AFFLUENT, LARGEUR_RIVIERE, TAILLE_CASE, ESPACEMENT, horsVallee, type P } from '../logic/carte'
 
 /** écart entre deux cases du plan */
 export const S = TAILLE_CASE
@@ -98,8 +98,9 @@ export function serpenter(a: [number, number], b: [number, number], amp = 0.7): 
   const ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L, ph = a[0] * 0.37 + a[1] * 0.61 + b[0] * 0.13 + b[1] * 0.29
   const n = Math.max(2, Math.ceil(L / 1.5)), out: [number, number][] = []
   for (let k = 0; k <= n; k++) {
-    const t = L * k / n, env = Math.min(1, t / 3, (L - t) / 3)
-    const o = amp * env * (0.65 * Math.sin(t * 0.3 + ph) + 0.35 * Math.sin(t * 0.83 + ph * 1.7))
+    const t = L * k / n, env = Math.min(1, t / 2.5, (L - t) / 2.5)
+    // trois ondulations de longueurs différentes et sans rapport entre elles : le tracé ne se répète pas
+    const o = amp * env * (0.5 * Math.sin(t * 0.17 + ph) + 0.32 * Math.sin(t * 0.43 + ph * 2.3) + 0.18 * Math.sin(t * 1.1 + ph * 3.7))
     out.push([a[0] + ux * t - uz * o, a[1] + uz * t + ux * o])
   }
   return out
@@ -142,7 +143,7 @@ export function hauteurSol(x: number, z: number, d = horsVallee([x / S, z / S]))
   if (d <= 0) return 0
   const bosses = Math.sin(x * 0.07) * Math.cos(z * 0.06) * 2.2 + Math.sin(x * 0.021 + z * 0.03) * 3.5 + 1.5
   // les pentes montent vite dès le bord de la vallée : on se sent enclavé entre les montagnes
-  return lisse(d / 3.5) * 34 + lisse(d / 12) * 26 + lisse(d / 2) * bosses
+  return (lisse(d / 3.5) * 34 + lisse(d / 12) * 26 + lisse(d / 2) * bosses) * ESPACEMENT
 }
 /** direction (unitaire) qui descend vers le fond de la vallée, en x, z */
 export function versVallee(x: number, z: number): [number, number] {
