@@ -7,7 +7,7 @@ import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
 import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
 import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, ESPACEMENT, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
-import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, serpenter, adoucir, COURS, S } from './terrain'
+import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, adoucir, COURS, S } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -405,7 +405,9 @@ export class VillageScene {
       }
       if (!mine && !chantier) entaille(px, pz, y, nx, nz, e)
     }
-    parcelles.forEach(({ id, i, b, c, sc }) => {
+    // pied de chaque bâtiment : d'où partent les chemins de terre, et ce qu'ils contournent
+    const pieds: { x: number; z: number; r: number; coeur: boolean }[] = []
+    parcelles.forEach(({ id, i, b, c, sc, coeur }) => {
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
       const x = (c[0] + sc.dx) * S, z = (c[1] + sc.dz) * S, e = ECHELLE * sc.echelle
       const theta = (c[0] === 0 && c[1] === 0) ? 0 : Math.round(Math.atan2(-c[0], -c[1]) / (Math.PI / 2)) * (Math.PI / 2)
@@ -423,6 +425,7 @@ export class VillageScene {
       // (une mine ou une carrière a pu glisser contre le flanc de sa montagne)
       const r = rayon(b.shape) * e
       if (r) this.collisions.push({ x: g.position.x, z: g.position.z, r })
+      pieds.push({ x: g.position.x, z: g.position.z, r: Math.max(r, 1.6 * e), coeur })
       this.groupeBat.add(g)
       this.cliquables.push(g)
     })
@@ -439,9 +442,11 @@ export class VillageScene {
       this.groupeBat.add(g)
       this.cliquables.push(g)
     }
-    chantiersParcelle.forEach(({ id, k, c, sc }) => {
+    chantiersParcelle.forEach(({ id, k, c, sc, coeur }) => {
       const x = (c![0] + sc.dx) * S, z = (c![1] + sc.dz) * S
       placerChantier(id, k, x, z, (c![0] === 0 && c![1] === 0) ? 0 : Math.round(Math.atan2(-c![0], -c![1]) / (Math.PI / 2)) * (Math.PI / 2), sc.echelle)
+      const g = this.cliquables[this.cliquables.length - 1]
+      pieds.push({ x: g.position.x, z: g.position.z, r: 1.6 * ECHELLE * sc.echelle, coeur })
     })
 
     // ── rues pavées : autour de chaque case du cœur, et la grande rue qui relie les deux portes ──
@@ -454,7 +459,7 @@ export class VillageScene {
     this.saisonniers.push({ m: matTerre, base: matTerre.color.getHex(), t: { hiver: [NEIGE, 0.7], automne: [0x7a5a3a, 0.2] } })
     const PN = PALISSADES.nord, PS = PALISSADES.sud
     const avecEnceinte = defenses.length > 0
-    const pave = new Map<string, [number, number][]>(), terre = new Map<string, [number, number][]>()
+    const pave = new Map<string, [number, number][]>()
     const occupees = [...parcelles, ...chantiersParcelle] as { c: Case | null; coeur: boolean }[]
     let xmin = Math.min(PN.porte, PS.porte), xmax = Math.max(PN.porte, PS.porte)
     for (const { c } of occupees.filter(x => x.coeur && x.c)) {
@@ -467,122 +472,114 @@ export class VillageScene {
     ajouterLigne(pave, xmin * S, 0.5 * S, xmax * S, 0.5 * S)
     ajouterLigne(pave, PN.porte * S, PN.z * S, PN.porte * S, 0.5 * S)
     ajouterLigne(pave, PS.porte * S, 0.5 * S, PS.porte * S, PS.z * S)
-    // un réseau le long des bords des cases, rendu moins rectiligne : chaque tronçon serpente,
-    // chaque virage est un arc de cercle, chaque croisement une placette ronde
-    const tracer = (lignes: Map<string, [number, number][]>, amp: number, rayon: number) => {
-      const segs = fusionLignes(lignes)
-      type Bout = { i: number; fin: 0 | 1; d: [number, number] }
-      const noeuds = new Map<string, { p: [number, number]; bouts: Bout[] }>()
-      const bouts = segs.map(({ horizontal, pos, a, b }, i) => {
-        const p0: [number, number] = horizontal ? [a, pos] : [pos, a], p1: [number, number] = horizontal ? [b, pos] : [pos, b]
-        const u: [number, number] = horizontal ? [1, 0] : [0, 1]
-        for (const [p, fin, d] of [[p0, 0, u], [p1, 1, [-u[0], -u[1]]]] as const) {
-          const k = p[0].toFixed(1) + ',' + p[1].toFixed(1)
-          const n = noeuds.get(k) ?? noeuds.set(k, { p, bouts: [] }).get(k)!
-          n.bouts.push({ i, fin, d: d as [number, number] })
-        }
-        return { p0, p1, l: Math.abs(b - a), r0: 0, r1: 0 }
-      })
-      const traces: [number, number][][] = [], places: [number, number][] = []
-      for (const n of noeuds.values()) {
-        const [b1, b2] = n.bouts
-        if (n.bouts.length === 2 && Math.abs(b1.d[0] * b2.d[0] + b1.d[1] * b2.d[1]) < 0.1) {
-          // virage : les deux tronçons s'arrêtent avant le coin, un quart de cercle les relie
-          const r = Math.min(rayon, bouts[b1.i].l * 0.45, bouts[b2.i].l * 0.45)
-          for (const x of [b1, b2]) bouts[x.i][x.fin ? 'r1' : 'r0'] = r
-          const cx = n.p[0] + (b1.d[0] + b2.d[0]) * r, cz = n.p[1] + (b1.d[1] + b2.d[1]) * r, arc: [number, number][] = []
-          for (let k = 0; k <= 8; k++) {
-            const t = k / 8 * Math.PI / 2
-            arc.push([cx - b2.d[0] * r * Math.cos(t) - b1.d[0] * r * Math.sin(t), cz - b2.d[1] * r * Math.cos(t) - b1.d[1] * r * Math.sin(t)])
-          }
-          traces.push(arc)
-        } else if (n.bouts.length > 2) places.push(n.p)
-      }
-      for (const { p0, p1, l, r0, r1 } of bouts) {
-        const ux = (p1[0] - p0[0]) / l, uz = (p1[1] - p0[1]) / l
-        traces.push(serpenter([p0[0] + ux * r0, p0[1] + uz * r0], [p1[0] - ux * r1, p1[1] - uz * r1], amp))
-      }
-      return { segs, traces, places }
-    }
-    const rues = tracer(pave, 0.8, 3.5)
-    for (const t of rues.traces) this.groupeBat.add(ruban(t, LARGEUR, matChemin, 0.012))
-    for (const [x, z] of rues.places) {
-      const d = new THREE.Mesh(new THREE.CircleGeometry(LARGEUR * 0.85, 16), matChemin)
-      d.rotation.x = -Math.PI / 2; d.position.set(x, 0.0125, z); d.receiveShadow = true
-      this.groupeBat.add(d)
-    }
-    // pavés posés le long des rues, rangées décalées d'un demi-pavé ; aussi sur les placettes
-    const poses: THREE.Matrix4[] = [], teintes: number[] = []
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), ech = new THREE.Vector3(), p = new THREE.Vector3(), coul = new THREE.Color()
-    const haut = new THREE.Vector3(0, 1, 0)
-    let graine = 0
-    const paver = (px: number, pz: number, angle: number) => {
-      // pas de pavés dans l'eau : le pont passe au-dessus
-      if (distRiviereLisse(px, pz) < LARGEUR_RIVIERE * S / 2 + 0.3) return
-      const h = Math.sin(++graine * 12.9898) * 43758.5453, r = h - Math.floor(h), r2 = (r * 7.31) % 1
-      p.set(px, 0.01 + r * 0.015, pz)
-      q.setFromAxisAngle(haut, angle + (r - 0.5) * 0.25)
-      ech.set(0.85 + r2 * 0.25, 1, 0.85 + r * 0.25)
-      poses.push(m4.compose(p, q, ech).clone()); teintes.push(0.8 + r2 * 0.3)
+    const bandes = fusionLignes(pave).map(({ horizontal, pos, a, b }) => ({ x: horizontal ? (a + b) / 2 : pos, z: horizontal ? pos : (a + b) / 2, horizontal, lg: b - a + LARGEUR }))
+    for (const b of bandes) {
+      const ch = new THREE.Mesh(new THREE.PlaneGeometry(b.horizontal ? b.lg : LARGEUR, b.horizontal ? LARGEUR : b.lg), matChemin)
+      ch.rotation.x = -Math.PI / 2
+      ch.position.set(b.x, 0.012, b.z)
+      ch.receiveShadow = true
+      this.groupeBat.add(ch)
     }
     const nt = Math.floor(LARGEUR / PAS)
-    for (const t of rues.traces) {
-      let reste = 0
-      for (let k = 1; k < t.length; k++) {
-        const [ax, az] = t[k - 1], [bx, bz] = t[k], l = Math.hypot(bx - ax, bz - az)
-        if (l < 1e-3) continue
-        const ux = (bx - ax) / l, uz = (bz - az) / l, angle = Math.atan2(ux, uz)
-        let u = reste
-        for (; u < l; u += PAS) for (let j = 0; j < nt; j++) {
-          const v = -LARGEUR / 2 + (j + 0.5) * PAS + (LARGEUR - nt * PAS) / 2, uu = u + (j % 2) * PAS / 2
-          if (uu < l) paver(ax + ux * uu - uz * v, az + uz * uu + ux * v, angle)
-        }
-        reste = u - l
+    const nbMax = bandes.reduce((t, b) => t + Math.floor(b.lg / PAS) * nt, 0)
+    const paves = new THREE.InstancedMesh(new THREE.BoxGeometry(PAS * 0.86, 0.07, PAS * 0.86), matPave, Math.max(1, nbMax))
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), ech = new THREE.Vector3(), p = new THREE.Vector3(), coul = new THREE.Color()
+    const haut = new THREE.Vector3(0, 1, 0)
+    let np = 0
+    bandes.forEach((b, ib) => {
+      const lg = b.lg, nl = Math.floor(lg / PAS)
+      for (let i = 0; i < nl; i++) for (let j = 0; j < nt; j++) {
+        const h = Math.sin((ib * 977 + i * 131 + j * 17) * 12.9898) * 43758.5453
+        const r = h - Math.floor(h), r2 = (r * 7.31) % 1
+        // rangées décalées d'un demi-pavé, comme un appareil en quinconce
+        const u = -lg / 2 + (i + 0.5 + (j % 2) * 0.5) * PAS, v = -LARGEUR / 2 + (j + 0.5) * PAS + (LARGEUR - nt * PAS) / 2
+        if (u > lg / 2 - PAS * 0.4) continue
+        // pas de pavés dans l'eau : le pont passe au-dessus
+        const px = b.x + (b.horizontal ? u : v), pz = b.z + (b.horizontal ? v : u)
+        if (distRiviereLisse(px, pz) < LARGEUR_RIVIERE * S / 2 + 0.3) continue
+        p.set(px, 0.01 + r * 0.015, pz)
+        q.setFromAxisAngle(haut, (r - 0.5) * 0.25)
+        ech.set(0.85 + r2 * 0.25, 1, 0.85 + r * 0.25)
+        m4.compose(p, q, ech)
+        paves.setMatrixAt(np, m4)
+        paves.setColorAt(np, coul.setHex(0xa8a294).multiplyScalar(0.8 + r2 * 0.3))
+        np++
       }
-    }
-    for (const [x, z] of rues.places) for (let dx = -LARGEUR; dx <= LARGEUR; dx += PAS) for (let dz = -LARGEUR; dz <= LARGEUR; dz += PAS)
-      if (Math.hypot(dx, dz) < LARGEUR * 0.8) paver(x + dx, z + dz, 0)
-    const paves = new THREE.InstancedMesh(new THREE.BoxGeometry(PAS * 0.86, 0.07, PAS * 0.86), matPave, Math.max(1, poses.length))
-    poses.forEach((m, k) => { paves.setMatrixAt(k, m); paves.setColorAt(k, coul.setHex(0xa8a294).multiplyScalar(teintes[k])) })
-    paves.count = poses.length
+    })
+    paves.count = np
     paves.receiveShadow = true
     this.groupeBat.add(paves)
 
-    // ── chemins de terre vers les bâtiments hors du cœur : ils longent les bords des cases (jamais à travers
-    // un bâtiment) jusqu'à la rue de la porte la plus proche ──
-    for (const k of new Set(occupees.filter(x => !x.coeur && x.c).map(x => cleCase(x.c!)))) {
-      const [i, j] = k.split(',').map(Number)
-      if (j < PN.z || j > PS.z) {
-        // hors des palissades : on longe la colonne jusqu'à la piste qui court devant la palissade
-        // (rangée laissée libre), puis la piste mène à la porte ; les chemins se rejoignent au lieu de se multiplier
-        const P = j < PN.z ? PN : PS, sens = j < PN.z ? 1 : -1
-        const zPiste = (P.z - sens * 0.5) * S, xr = P.porte * S
-        const zc = (j + sens * 0.5) * S, xc = i * S > xr ? (i - 0.5) * S : (i + 0.5) * S
-        ajouterLigne(terre, xc, zc, xc, zPiste); ajouterLigne(terre, xc, zPiste, xr, zPiste); ajouterLigne(terre, xr, zPiste, xr, P.z * S)
-      } else {
-        // entre les palissades (vignoble…) : jusqu'à la rue d'une porte, puis la grande rue
-        const xr = (i < 0 ? PS.porte : PN.porte) * S, zc = (j <= 0 ? j + 0.5 : j - 0.5) * S, xc = i * S > xr ? (i - 0.5) * S : (i + 0.5) * S
-        ajouterLigne(terre, xc, zc, xr, zc); ajouterLigne(terre, xr, zc, xr, 0.5 * S)
-      }
-    }
-    const LT = 1.3
-    const sentiers = tracer(terre, 1.1, 3.2), chemins = sentiers.segs
-    for (const t of sentiers.traces) this.groupeBat.add(ruban(t, LT, matTerre, 0.008))
-    for (const [x, z] of sentiers.places) {
-      const d = new THREE.Mesh(new THREE.CircleGeometry(LT * 0.75, 14), matTerre)
-      d.rotation.x = -Math.PI / 2; d.position.set(x, 0.0085, z); d.receiveShadow = true
-      this.groupeBat.add(d)
-    }
     // routes de terre : vers les plaines au sud-ouest, vers les mines au nord ; en courbes douces
     const routes = [ROUTE_PLAINES, ROUTE_NORD].map(r => adoucir(r.map(([x, z]) => [x * S, z * S] as [number, number])))
     for (const r of routes) this.groupeBat.add(ruban(r, 2.4, matTerre, 0.009))
 
+    // ── chemins de terre : un réseau libre, comme des sentiers de campagne ──
+    // Il part des portes (et de la grande rue entre les palissades) ; chaque bâtiment du dehors s'y raccorde,
+    // du plus proche au plus lointain, par une courbe douce vers le point le plus proche du réseau déjà tracé :
+    // les chemins se ramifient. Une courbe qui passerait sur un bâtiment est infléchie pour le contourner.
+    const LT = 1.3
+    const echantillons = (pts: [number, number][], pas = 2) => {
+      const out: [number, number][] = []
+      for (let k = 1; k < pts.length; k++) {
+        const [ax, az] = pts[k - 1], [bx, bz] = pts[k], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / pas))
+        for (let i = 0; i <= n; i++) out.push([ax + (bx - ax) * i / n, az + (bz - az) * i / n])
+      }
+      return out
+    }
+    const cote = (z: number) => z < PN.z * S ? 0 : z > PS.z * S ? 2 : 1   // nord, entre les palissades, sud
+    const reseaux: [number, number][][] = [
+      [...echantillons([[PN.porte * S, PN.z * S], [PN.porte * S, (PN.z - 0.6) * S]]), ...echantillons(routes[1])],
+      fusionLignes(pave).flatMap(({ horizontal, pos, a, b }) => echantillons(horizontal ? [[a, pos], [b, pos]] : [[pos, a], [pos, b]])),
+      [...echantillons([[PS.porte * S, PS.z * S], [PS.porte * S, (PS.z + 0.6) * S]]), ...echantillons(routes[0])],
+    ]
+    const sentiers: [number, number][][] = []
+    const hasard = (x: number, z: number) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v) }
+    const depart = (c: number) => c === 0 ? [PN.porte * S, PN.z * S] : c === 2 ? [PS.porte * S, PS.z * S] : [0, 0.5 * S]
+    const dehors = pieds.filter(b => !b.coeur).sort((a, b) => {
+      const da = depart(cote(a.z)), db = depart(cote(b.z))
+      return Math.hypot(a.x - da[0], a.z - da[1]) - Math.hypot(b.x - db[0], b.z - db[1])
+    })
+    for (const bat of dehors) {
+      const reseau = reseaux[cote(bat.z)]
+      let cible = reseau[0], dmin = Infinity
+      for (const p of reseau) { const d = Math.hypot(p[0] - bat.x, p[1] - bat.z); if (d < dmin) { dmin = d; cible = p } }
+      if (dmin < bat.r + 1.5) continue
+      // part du bord du bâtiment, côté réseau
+      const ux = (cible[0] - bat.x) / dmin, uz = (cible[1] - bat.z) / dmin
+      const a: [number, number] = [bat.x + ux * (bat.r + 0.6), bat.z + uz * (bat.r + 0.6)], L = dmin - bat.r - 0.6
+      // courbe de Bézier dont le point de contrôle s'écarte sur le côté ; on essaie plusieurs écarts
+      // et on garde le premier qui ne touche aucun autre bâtiment
+      const h = hasard(bat.x, bat.z), essais = [0.12 + h * 0.18, -(0.12 + h * 0.18), 0.4, -0.4, 0.65, -0.65]
+      let meilleur: [number, number][] = [], gene = Infinity
+      for (const e of essais) {
+        const cx = (a[0] + cible[0]) / 2 - uz * L * e, cz = (a[1] + cible[1]) / 2 + ux * L * e
+        const n = Math.max(4, Math.ceil(L / 1.5)), pts: [number, number][] = []
+        for (let i = 0; i <= n; i++) {
+          const t = i / n, w = (1 - t) * (1 - t), m = 2 * t * (1 - t), v = t * t
+          pts.push([w * a[0] + m * cx + v * cible[0], w * a[1] + m * cz + v * cible[1]])
+        }
+        const touche = pts.filter(([x, z]) => pieds.some(o => o !== bat && Math.hypot(o.x - x, o.z - z) < o.r + 0.9)).length
+        if (touche < gene) { gene = touche; meilleur = pts }
+        if (!touche) break
+      }
+      sentiers.push(meilleur)
+      reseau.push(...meilleur)
+    }
+    for (const t of sentiers) {
+      this.groupeBat.add(ruban(t, LT, matTerre, 0.008))
+      // raccord arrondi là où le sentier rejoint le réseau
+      const [x, z] = t[t.length - 1], d = new THREE.Mesh(new THREE.CircleGeometry(LT * 0.7, 12), matTerre)
+      d.rotation.x = -Math.PI / 2; d.position.set(x, 0.0085, z); d.receiveShadow = true
+      this.groupeBat.add(d)
+    }
+
     // ── ponts là où une rue, un chemin ou une route franchit la rivière ──
     const traversees: { x: number; z: number; angle: number; large: number }[] = []
-    for (const { horizontal, pos, a, b } of rues.segs) for (const t of croiserRiviere(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b]))
+    for (const { horizontal, pos, a, b } of fusionLignes(pave)) for (const t of croiserRiviere(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b]))
       traversees.push({ ...t, angle: horizontal ? 0 : Math.PI / 2, large: LARGEUR + 0.6 })
-    for (const { horizontal, pos, a, b } of chemins) for (const t of croiserRiviere(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b]))
-      traversees.push({ ...t, angle: horizontal ? 0 : Math.PI / 2, large: LT + 0.5 })
+    for (const t of sentiers) for (let k = 1; k < t.length; k++) for (const c of croiserRiviere(t[k - 1], t[k]))
+      traversees.push({ ...c, angle: Math.atan2(t[k][1] - t[k - 1][1], t[k][0] - t[k - 1][0]), large: LT + 0.5 })
     for (const r of routes) for (let k = 1; k < r.length; k++) for (const t of croiserRiviere(r[k - 1], r[k]))
       traversees.push({ ...t, angle: Math.atan2(r[k][1] - r[k - 1][1], r[k][0] - r[k - 1][0]), large: 2.8 })
     for (const t of traversees) {

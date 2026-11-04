@@ -88,23 +88,6 @@ export function ruban(pts: [number, number][], largeur: number, mat: THREE.Mater
   return m
 }
 
-/**
- * Tracé un peu sinueux de a à b (chemins de terre) : un écart latéral de quelques dizaines de centimètres,
- * qui retombe à zéro aux deux bouts pour que les chemins se raccordent toujours.
- */
-export function serpenter(a: [number, number], b: [number, number], amp = 0.7): [number, number][] {
-  const L = Math.hypot(b[0] - a[0], b[1] - a[1])
-  if (L < 0.01) return [a, b]
-  const ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L, ph = a[0] * 0.37 + a[1] * 0.61 + b[0] * 0.13 + b[1] * 0.29
-  const n = Math.max(2, Math.ceil(L / 1.5)), out: [number, number][] = []
-  for (let k = 0; k <= n; k++) {
-    const t = L * k / n, env = Math.min(1, t / 2.5, (L - t) / 2.5)
-    // trois ondulations de longueurs différentes et sans rapport entre elles : le tracé ne se répète pas
-    const o = amp * env * (0.5 * Math.sin(t * 0.17 + ph) + 0.32 * Math.sin(t * 0.43 + ph * 2.3) + 0.18 * Math.sin(t * 1.1 + ph * 3.7))
-    out.push([a[0] + ux * t - uz * o, a[1] + uz * t + ux * o])
-  }
-  return out
-}
 /** Ligne brisée adoucie (routes) : courbe lisse qui passe par les points, avec un léger serpentement. */
 export function adoucir(pts: [number, number][], amp = 0.9): [number, number][] {
   const c = new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), false, 'centripetal')
