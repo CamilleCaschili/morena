@@ -7,7 +7,7 @@ import { construireBatiment, construireChantier } from './modeles'
 import type { Saison } from '../logic/calendrier'
 import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
 import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, ESPACEMENT, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
-import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, adoucir, COURS, S } from './terrain'
+import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, adoucir, COURS, S, TAILLE_SOL, CARREAUX_SOL } from './terrain'
 import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
@@ -405,8 +405,13 @@ export class VillageScene {
       }
       if (!mine && !chantier) entaille(px, pz, y, nx, nz, e)
     }
-    // pied de chaque bâtiment : d'où partent les chemins de terre, et ce qu'ils contournent
-    const pieds: { x: number; z: number; r: number; coeur: boolean }[] = []
+    // pied de chaque bâtiment : d'où partent les chemins de terre, et ce qu'ils contournent ;
+    // hx, hz : demi-largeurs de son emprise au sol
+    const pieds: { x: number; z: number; hx: number; hz: number; coeur: boolean }[] = []
+    const emprise = (g: THREE.Object3D, coeur: boolean) => {
+      const b = new THREE.Box3().setFromObject(g)
+      pieds.push({ x: (b.min.x + b.max.x) / 2, z: (b.min.z + b.max.z) / 2, hx: (b.max.x - b.min.x) / 2, hz: (b.max.z - b.min.z) / 2, coeur })
+    }
     parcelles.forEach(({ id, i, b, c, sc, coeur }) => {
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
       const x = (c[0] + sc.dx) * S, z = (c[1] + sc.dz) * S, e = ECHELLE * sc.echelle
@@ -425,7 +430,7 @@ export class VillageScene {
       // (une mine ou une carrière a pu glisser contre le flanc de sa montagne)
       const r = rayon(b.shape) * e
       if (r) this.collisions.push({ x: g.position.x, z: g.position.z, r })
-      pieds.push({ x: g.position.x, z: g.position.z, r: Math.max(r, 1.6 * e), coeur })
+      emprise(g, coeur)
       this.groupeBat.add(g)
       this.cliquables.push(g)
     })
@@ -445,8 +450,7 @@ export class VillageScene {
     chantiersParcelle.forEach(({ id, k, c, sc, coeur }) => {
       const x = (c![0] + sc.dx) * S, z = (c![1] + sc.dz) * S
       placerChantier(id, k, x, z, (c![0] === 0 && c![1] === 0) ? 0 : Math.round(Math.atan2(-c![0], -c![1]) / (Math.PI / 2)) * (Math.PI / 2), sc.echelle)
-      const g = this.cliquables[this.cliquables.length - 1]
-      pieds.push({ x: g.position.x, z: g.position.z, r: 1.6 * ECHELLE * sc.echelle, coeur })
+      emprise(this.cliquables[this.cliquables.length - 1], coeur)
     })
 
     // ── rues pavées : autour de chaque case du cœur, et la grande rue qui relie les deux portes ──
@@ -512,12 +516,13 @@ export class VillageScene {
 
     // routes de terre : vers les plaines au sud-ouest, vers les mines au nord ; en courbes douces
     const routes = [ROUTE_PLAINES, ROUTE_NORD].map(r => adoucir(r.map(([x, z]) => [x * S, z * S] as [number, number])))
-    for (const r of routes) this.groupeBat.add(ruban(r, 2.4, matTerre, 0.009))
+    for (const r of routes) this.groupeBat.add(ruban(r, 2.4, matTerre, 0.009, true))
 
     // ── chemins de terre : un réseau libre, comme des sentiers de campagne ──
     // Il part des portes (et de la grande rue entre les palissades) ; chaque bâtiment du dehors s'y raccorde,
-    // du plus proche au plus lointain, par une courbe douce vers le point le plus proche du réseau déjà tracé :
-    // les chemins se ramifient. Une courbe qui passerait sur un bâtiment est infléchie pour le contourner.
+    // du plus proche au plus lointain, vers le point le plus proche du réseau déjà tracé : les chemins se ramifient.
+    // Chaque chemin est fait de segments droits, avec un ou deux coudes placés au hasard (jamais sur la grille) ;
+    // s'il passe sur un autre bâtiment, on tire d'autres coudes pour le contourner.
     const LT = 1.3
     const echantillons = (pts: [number, number][], pas = 2) => {
       const out: [number, number][] = []
@@ -528,51 +533,59 @@ export class VillageScene {
       return out
     }
     const cote = (z: number) => z < PN.z * S ? 0 : z > PS.z * S ? 2 : 1   // nord, entre les palissades, sud
-    const reseaux: [number, number][][] = [
+    // réseau de base : rues pavées et routes ; les chemins tracés s'y ajoutent au fur et à mesure
+    const base: [number, number][][] = [
       [...echantillons([[PN.porte * S, PN.z * S], [PN.porte * S, (PN.z - 0.6) * S]]), ...echantillons(routes[1])],
       fusionLignes(pave).flatMap(({ horizontal, pos, a, b }) => echantillons(horizontal ? [[a, pos], [b, pos]] : [[pos, a], [pos, b]])),
       [...echantillons([[PS.porte * S, PS.z * S], [PS.porte * S, (PS.z + 0.6) * S]]), ...echantillons(routes[0])],
     ]
+    const reseaux = base.map(r => [...r])
+    const proche = (pts: [number, number][], x: number, z: number) => {
+      let cible = pts[0], d = Infinity
+      for (const p of pts) { const e = Math.hypot(p[0] - x, p[1] - z); if (e < d) { d = e; cible = p } }
+      return { cible, d }
+    }
     const sentiers: [number, number][][] = []
-    const hasard = (x: number, z: number) => { const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return v - Math.floor(v) }
+    const hasard = (k: number) => { const v = Math.sin(k * 12.9898 + 4.1) * 43758.5453; return v - Math.floor(v) }
     const depart = (c: number) => c === 0 ? [PN.porte * S, PN.z * S] : c === 2 ? [PS.porte * S, PS.z * S] : [0, 0.5 * S]
     const dehors = pieds.filter(b => !b.coeur).sort((a, b) => {
       const da = depart(cote(a.z)), db = depart(cote(b.z))
       return Math.hypot(a.x - da[0], a.z - da[1]) - Math.hypot(b.x - db[0], b.z - db[1])
     })
+    // distance de (x, z) à l'emprise d'un bâtiment (0 dedans)
+    const horsEmprise = (o: typeof pieds[number], x: number, z: number) => Math.hypot(Math.max(0, Math.abs(x - o.x) - o.hx), Math.max(0, Math.abs(z - o.z) - o.hz))
     for (const bat of dehors) {
+      // déjà au bord d'une rue ou d'une route : rien à tracer
+      const surBase = base[cote(bat.z)].some(([x, z]) => horsEmprise(bat, x, z) < 0.8)
+      if (surBase) continue
       const reseau = reseaux[cote(bat.z)]
       let cible = reseau[0], dmin = Infinity
-      for (const p of reseau) { const d = Math.hypot(p[0] - bat.x, p[1] - bat.z); if (d < dmin) { dmin = d; cible = p } }
-      if (dmin < bat.r + 1.5) continue
-      // part du bord du bâtiment, côté réseau
-      const ux = (cible[0] - bat.x) / dmin, uz = (cible[1] - bat.z) / dmin
-      const a: [number, number] = [bat.x + ux * (bat.r + 0.6), bat.z + uz * (bat.r + 0.6)], L = dmin - bat.r - 0.6
-      // courbe de Bézier dont le point de contrôle s'écarte sur le côté ; on essaie plusieurs écarts
-      // et on garde le premier qui ne touche aucun autre bâtiment
-      const h = hasard(bat.x, bat.z), essais = [0.12 + h * 0.18, -(0.12 + h * 0.18), 0.4, -0.4, 0.65, -0.65]
-      let meilleur: [number, number][] = [], gene = Infinity
-      for (const e of essais) {
-        const cx = (a[0] + cible[0]) / 2 - uz * L * e, cz = (a[1] + cible[1]) / 2 + ux * L * e
-        const n = Math.max(4, Math.ceil(L / 1.5)), pts: [number, number][] = []
-        for (let i = 0; i <= n; i++) {
-          const t = i / n, w = (1 - t) * (1 - t), m = 2 * t * (1 - t), v = t * t
-          pts.push([w * a[0] + m * cx + v * cible[0], w * a[1] + m * cz + v * cible[1]])
+      for (const p of reseau) { const e = horsEmprise(bat, p[0], p[1]); if (e < dmin) { dmin = e; cible = p } }
+      const d = Math.hypot(cible[0] - bat.x, cible[1] - bat.z) || 1
+      const ux = (cible[0] - bat.x) / d, uz = (cible[1] - bat.z) / d
+      // part du bord de l'emprise, côté réseau
+      const bordE = Math.min(Math.abs(ux) > 1e-3 ? bat.hx / Math.abs(ux) : Infinity, Math.abs(uz) > 1e-3 ? bat.hz / Math.abs(uz) : Infinity)
+      const a: [number, number] = [bat.x + ux * (bordE + 0.3), bat.z + uz * (bordE + 0.3)], L = Math.max(0.5, d - bordE - 0.3)
+      const graine = Math.round(bat.x * 7 + bat.z * 13)
+      let meilleur: [number, number][] = [a, cible], gene = Infinity
+      for (let essai = 0; essai < 12; essai++) {
+        const nb = L < 10 ? 1 : 2, pts: [number, number][] = [a]
+        for (let k = 1; k <= nb; k++) {
+          // coude : à une position et un écart latéral tirés au hasard, plus marqués aux essais suivants
+          const t = (k - 0.5 + (hasard(graine + essai * 31 + k) - 0.5) * 0.6) / nb
+          const ecart = (hasard(graine + essai * 57 + k * 3) - 0.5) * L * (0.25 + essai * 0.06)
+          pts.push([a[0] + (cible[0] - a[0]) * t - uz * ecart, a[1] + (cible[1] - a[1]) * t + ux * ecart])
         }
-        const touche = pts.filter(([x, z]) => pieds.some(o => o !== bat && Math.hypot(o.x - x, o.z - z) < o.r + 0.9)).length
+        pts.push(cible)
+        const touche = echantillons(pts, 0.8).filter(([x, z]) => pieds.some(o => o !== bat && horsEmprise(o, x, z) < 0.5)).length
         if (touche < gene) { gene = touche; meilleur = pts }
         if (!touche) break
       }
       sentiers.push(meilleur)
-      reseau.push(...meilleur)
+      // les autres chemins peuvent s'y brancher, mais pas tout contre le bâtiment qu'il dessert
+      reseau.push(...echantillons(meilleur).filter(([x, z]) => horsEmprise(bat, x, z) > 2))
     }
-    for (const t of sentiers) {
-      this.groupeBat.add(ruban(t, LT, matTerre, 0.008))
-      // raccord arrondi là où le sentier rejoint le réseau
-      const [x, z] = t[t.length - 1], d = new THREE.Mesh(new THREE.CircleGeometry(LT * 0.7, 12), matTerre)
-      d.rotation.x = -Math.PI / 2; d.position.set(x, 0.0085, z); d.receiveShadow = true
-      this.groupeBat.add(d)
-    }
+    for (const t of sentiers) this.groupeBat.add(ruban(t, LT, matTerre, 0.008, true))
 
     // ── ponts là où une rue, un chemin ou une route franchit la rivière ──
     const traversees: { x: number; z: number; angle: number; large: number }[] = []
@@ -770,7 +783,7 @@ export class VillageScene {
 
     // sol : plat au fond de la vallée et dans les plaines, il monte vers les montagnes
     // bien plus grand que ce que la caméra peut voir, pour ne jamais apercevoir le bord ni le dessous
-    const sol = new THREE.PlaneGeometry(1400 * ESPACEMENT, 1400 * ESPACEMENT, 220, 220)
+    const sol = new THREE.PlaneGeometry(TAILLE_SOL, TAILLE_SOL, CARREAUX_SOL, CARREAUX_SOL)
     sol.rotateX(-Math.PI / 2)
     const pos = sol.attributes.position as THREE.BufferAttribute
     const couleurs: number[] = [], loins = new Float32Array(pos.count)

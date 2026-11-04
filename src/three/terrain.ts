@@ -67,8 +67,19 @@ export function fusionLignes(lignes: Lignes) {
   return out
 }
 /** bande au sol le long d'une ligne brisée (routes de terre, eau) */
-export function ruban(pts: [number, number][], largeur: number, mat: THREE.Material, y: number) {
+/** relief : la bande suit le sol (chemins au pied des montagnes) au lieu de rester à plat */
+export function ruban(pts: [number, number][], largeur: number, mat: THREE.Material, y: number, relief = false) {
   const pos: number[] = [], idx: number[] = []
+  if (relief) {
+    // morceaux courts pour épouser les pentes
+    const fin: [number, number][] = [pts[0]]
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, az] = pts[i - 1], [bx, bz] = pts[i], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 1.2))
+      for (let k = 1; k <= n; k++) fin.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n])
+    }
+    pts = fin
+  }
+  const h = (x: number, z: number) => relief ? y + Math.max(0, solMaillage(x, z)) : y
   for (let i = 1; i < pts.length; i++) {
     const [ax, az] = pts[i - 1], [bx, bz] = pts[i]
     const l = Math.hypot(bx - ax, bz - az) || 1, ux = (bx - ax) / l, uz = (bz - az) / l
@@ -76,7 +87,8 @@ export function ruban(pts: [number, number][], largeur: number, mat: THREE.Mater
     const e = largeur / 2, nx = -uz * e, nz = ux * e
     const x0 = ax - ux * e * 0.6, z0 = az - uz * e * 0.6, x1 = bx + ux * e * 0.6, z1 = bz + uz * e * 0.6
     const b0 = pos.length / 3
-    pos.push(x0 + nx, y, z0 + nz, x0 - nx, y, z0 - nz, x1 + nx, y, z1 + nz, x1 - nx, y, z1 - nz)
+    pos.push(x0 + nx, h(x0 + nx, z0 + nz), z0 + nz, x0 - nx, h(x0 - nx, z0 - nz), z0 - nz,
+      x1 + nx, h(x1 + nx, z1 + nz), z1 + nz, x1 - nx, h(x1 - nx, z1 - nz), z1 - nz)
     idx.push(b0, b0 + 2, b0 + 1, b0 + 1, b0 + 2, b0 + 3)
   }
   const geo = new THREE.BufferGeometry()
@@ -127,6 +139,16 @@ export function hauteurSol(x: number, z: number, d = horsVallee([x / S, z / S]))
   const bosses = Math.sin(x * 0.07) * Math.cos(z * 0.06) * 2.2 + Math.sin(x * 0.021 + z * 0.03) * 3.5 + 1.5
   // les pentes montent vite dès le bord de la vallée : on se sent enclavé entre les montagnes
   return (lisse(d / 3.5) * 34 + lisse(d / 12) * 26 + lisse(d / 2) * bosses) * ESPACEMENT
+}
+/** maillage du sol dessiné par la scène : côté et nombre de carreaux */
+export const TAILLE_SOL = 1400 * ESPACEMENT, CARREAUX_SOL = 220
+/** hauteur du sol tel qu'il est dessiné (interpolé entre les sommets du maillage), un peu au-dessus par sécurité */
+export function solMaillage(x: number, z: number) {
+  const c = TAILLE_SOL / CARREAUX_SOL, i = Math.floor((x + TAILLE_SOL / 2) / c), j = Math.floor((z + TAILLE_SOL / 2) / c)
+  const x0 = -TAILLE_SOL / 2 + i * c, z0 = -TAILLE_SOL / 2 + j * c, u = (x - x0) / c, v = (z - z0) / c
+  const h00 = hauteurSol(x0, z0), h10 = hauteurSol(x0 + c, z0), h01 = hauteurSol(x0, z0 + c), h11 = hauteurSol(x0 + c, z0 + c)
+  const bilin = h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h01 * (1 - u) * v + h11 * u * v
+  return Math.max(bilin, hauteurSol(x, z)) + 0.04
 }
 /** direction (unitaire) qui descend vers le fond de la vallée, en x, z */
 export function versVallee(x: number, z: number): [number, number] {
