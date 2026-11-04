@@ -157,14 +157,14 @@ insert into public.village (id, etat, regles) values (1,
 '{
   "jour": 1,
   "stocks": {"or": 0, "nourriture": 299, "metal": 47, "bois": 14, "pierre": 4, "pt": 0, "tissu": 14, "charbon": 122, "fer": 64, "vin": 0},
-  "bat": {"puits": 1, "champs": 1, "elevage": 1, "tissage": 1, "chasseurs": 1, "bucherons": 1, "charbonniere": 1, "forge": 1, "carriere": 1, "auberge": 1, "mine_fer": 1},
-  "ordre": ["puits", "champs", "auberge", "forge", "bucherons", "carriere", "mine_fer", "chasseurs", "elevage", "tissage", "charbonniere"],
+  "bat": {"conseil": 1, "puits": 1, "carriere": 1, "bucherons": 1, "champs": 1, "chasseurs": 1, "mine_fer": 1, "forge": 1, "elevage": 1, "tissage": 1, "entrepot": 1, "maison_pierre": 3, "medecin": 1, "herboristerie": 1, "vignoble": 1, "fosse": 2, "palissade": 2, "scierie": 1, "cimetiere": 1, "maison_bois": 4, "ecole": 1, "theatre": 1, "route": 1, "comptoir": 1, "chapelle": 1, "tonnelier": 1, "apiculteur": 1, "brasseur": 1, "tailleur": 1, "auberge": 1, "carriere_ind": 1},
+  "ordre": ["conseil", "puits", "carriere", "bucherons", "champs", "chasseurs", "mine_fer", "forge", "elevage", "tissage", "entrepot", "maison_pierre", "maison_pierre", "maison_pierre", "medecin", "herboristerie", "vignoble", "fosse", "fosse", "palissade", "palissade", "scierie", "cimetiere", "maison_bois", "maison_bois", "maison_bois", "maison_bois", "ecole", "theatre", "route", "comptoir", "chapelle", "tonnelier", "apiculteur", "brasseur", "tailleur", "auberge", "carriere_ind"],
   "villageois": null,
   "mo": null,
   "empl": ["M", "F"],
   "chantiers": [],
-  "artisans": {},
-  "armee": {},
+  "artisans": {"brasseur": 1, "tonnelier": 1, "tailleur": 1},
+  "armee": {"milicien": 20},
   "gisements": []
 }'::jsonb,
 '{
