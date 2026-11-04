@@ -37,6 +37,71 @@ function tasDeblais(ax: number, az: number, h: number) {
 // (visible des deux côtés : l'entaille est une surface qui épouse la paroi)
 const matsTaille = [0xbab5aa, 0xa9a397, 0x8f897d].map(color => { const m = new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true, side: THREE.DoubleSide }); m.userData.partage = true; return m })
 
+/**
+ * Rues du cœur qui ne touchent pas le reste du réseau (une case isolée a son carré de rues à elle) :
+ * on les relie par le plus court chemin le long des bords des cases, en évitant les virages et la rivière.
+ * rues : arêtes du quadrillage (voir setVillage), modifié sur place.
+ */
+function relierIlots(rues: Set<string>, PN: { z: number; porte: number }, PS: { z: number; porte: number }) {
+  const cle = (a: number, b: number) => a + ',' + b
+  const voisins = (k: string): [string, string][] => {
+    const [a, b] = k.split(',').map(Number)
+    return [[cle(a + 1, b), `h${a},${b}`], [cle(a - 1, b), `h${a - 1},${b}`], [cle(a, b + 1), `v${a},${b}`], [cle(a, b - 1), `v${a},${b - 1}`]]
+  }
+  const noeuds = () => {
+    const n = new Set<string>()
+    for (const e of rues) { const [a, b] = e.slice(1).split(',').map(Number); n.add(cle(a, b)); n.add(e[0] === 'h' ? cle(a + 1, b) : cle(a, b + 1)) }
+    return n
+  }
+  // composantes connexes du réseau
+  const composantes = () => {
+    const tous = noeuds(), vu = new Map<string, number>()
+    let c = 0
+    for (const n of tous) {
+      if (vu.has(n)) continue
+      const pile = [n]; vu.set(n, c)
+      while (pile.length) { const m = pile.pop()!; for (const [v, e] of voisins(m)) if (rues.has(e) && !vu.has(v)) { vu.set(v, c); pile.push(v) } }
+      c++
+    }
+    return vu
+  }
+  // le réseau principal : celui de la grande rue, devant la porte nord
+  const principal = cle(Math.round(PN.porte + 0.5), 1)
+  // bornes : entre les palissades, sans dépasser de plus de quelques cases le village
+  const bMin = Math.round(PN.z + 0.5), bMax = Math.round(PS.z + 0.5)
+  for (let tour = 0; tour < 30; tour++) {
+    const comp = composantes(), cp = comp.get(principal)
+    const isole = [...comp.entries()].find(([, c]) => c !== cp)
+    if (!isole) return
+    const cible = isole[1]
+    // Dijkstra depuis tous les nœuds de l'îlot ; état : nœud et direction d'arrivée ; un virage coûte un peu
+    type Etat = { n: string; d: number; cout: number; prec: Etat | null; e: string | null }
+    const meilleur = new Map<string, number>(), file: Etat[] = []
+    for (const [n, c] of comp) if (c === cible) file.push({ n, d: -1, cout: 0, prec: null, e: null })
+    let fin: Etat | null = null
+    while (file.length) {
+      let i = 0
+      for (let k = 1; k < file.length; k++) if (file[k].cout < file[i].cout) i = k
+      const x = file.splice(i, 1)[0]
+      if (comp.get(x.n) === cp) { fin = x; break }
+      const k = x.n + '|' + x.d
+      if ((meilleur.get(k) ?? Infinity) <= x.cout && x.prec) continue
+      meilleur.set(k, x.cout)
+      voisins(x.n).forEach(([v, e], d) => {
+        const [a, b] = v.split(',').map(Number)
+        if (b < bMin || b > bMax || Math.abs(a) > 30) return
+        // arête déjà pavée : gratuite ; sinon une case, plus un virage, plus la rivière à franchir
+        const [ea, eb] = e.slice(1).split(',').map(Number)
+        const mx = (ea - 0.5 + (e[0] === 'h' ? 0.5 : 0)) * S, mz = (eb - 0.5 + (e[0] === 'v' ? 0.5 : 0)) * S
+        const cout = x.cout + (rues.has(e) ? 0.05 : 1 + (x.d >= 0 && x.d !== d ? 0.7 : 0) + (distRiviereLisse(mx, mz) < S * 0.3 ? 3 : 0))
+        if ((meilleur.get(v + '|' + d) ?? Infinity) > cout) file.push({ n: v, d, cout, prec: x, e })
+      })
+    }
+    if (!fin) return
+    for (let x: Etat | null = fin; x; x = x.prec) if (x.e) rues.add(x.e)
+  }
+}
+
 /* ── Montagnes du décor (logic/carte.ts) en 3D : base au plus bas du sol sous elles, sommet au-dessus ── */
 interface Cone { x: number; z: number; r: number; y: number; h: number; seg: number; rot: number; k: number }
 let CONES: Cone[] | null = null
@@ -465,17 +530,31 @@ export class VillageScene {
     const avecEnceinte = defenses.length > 0
     const pave = new Map<string, [number, number][]>()
     const occupees = [...parcelles, ...chantiersParcelle] as { c: Case | null; coeur: boolean }[]
+    // les rues suivent les bords des cases : un quadrillage dont les nœuds sont les coins des cases,
+    // (x, z) = (a − 0,5 ; b − 0,5) en cases ; une rue est une suite d'arêtes d'un coin au suivant
+    const rues = new Set<string>()
+    const arete = (a: number, b: number, horiz: boolean) => horiz ? `h${a},${b}` : `v${a},${b}`   // de (a, b) vers (a+1, b) ou (a, b+1)
+    const ligne = (x1: number, z1: number, x2: number, z2: number) => {
+      const a1 = Math.round(x1 + 0.5), b1 = Math.round(z1 + 0.5), a2 = Math.round(x2 + 0.5), b2 = Math.round(z2 + 0.5)
+      if (b1 === b2) for (let a = Math.min(a1, a2); a < Math.max(a1, a2); a++) rues.add(arete(a, b1, true))
+      else for (let b = Math.min(b1, b2); b < Math.max(b1, b2); b++) rues.add(arete(a1, b, false))
+    }
     let xmin = Math.min(PN.porte, PS.porte), xmax = Math.max(PN.porte, PS.porte)
     for (const { c } of occupees.filter(x => x.coeur && x.c)) {
       const [i, j] = c!
       xmin = Math.min(xmin, i - 0.5); xmax = Math.max(xmax, i + 0.5)
-      for (const [x1, z1, x2, z2] of [[i - 0.5, j - 0.5, i + 0.5, j - 0.5], [i - 0.5, j + 0.5, i + 0.5, j + 0.5], [i - 0.5, j - 0.5, i - 0.5, j + 0.5], [i + 0.5, j - 0.5, i + 0.5, j + 0.5]])
-        ajouterLigne(pave, x1 * S, z1 * S, x2 * S, z2 * S)
+      ligne(i - 0.5, j - 0.5, i + 0.5, j - 0.5); ligne(i - 0.5, j + 0.5, i + 0.5, j + 0.5)
+      ligne(i - 0.5, j - 0.5, i - 0.5, j + 0.5); ligne(i + 0.5, j - 0.5, i + 0.5, j + 0.5)
     }
     // grande rue est-ouest (elle franchit la rivière sur un pont), et les rues des deux portes
-    ajouterLigne(pave, xmin * S, 0.5 * S, xmax * S, 0.5 * S)
-    ajouterLigne(pave, PN.porte * S, PN.z * S, PN.porte * S, 0.5 * S)
-    ajouterLigne(pave, PS.porte * S, 0.5 * S, PS.porte * S, PS.z * S)
+    ligne(xmin, 0.5, xmax, 0.5)
+    ligne(PN.porte, PN.z, PN.porte, 0.5)
+    ligne(PS.porte, 0.5, PS.porte, PS.z)
+    relierIlots(rues, PN, PS)
+    for (const k of rues) {
+      const [a, b] = k.slice(1).split(',').map(Number), x = (a - 0.5) * S, z = (b - 0.5) * S
+      if (k[0] === 'h') ajouterLigne(pave, x, z, x + S, z); else ajouterLigne(pave, x, z, x, z + S)
+    }
     const bandes = fusionLignes(pave).map(({ horizontal, pos, a, b }) => ({ x: horizontal ? (a + b) / 2 : pos, z: horizontal ? pos : (a + b) / 2, horizontal, lg: b - a + LARGEUR }))
     for (const b of bandes) {
       const ch = new THREE.Mesh(new THREE.PlaneGeometry(b.horizontal ? b.lg : LARGEUR, b.horizontal ? LARGEUR : b.lg), matChemin)
