@@ -699,11 +699,23 @@ export function construireModele(shape: Shape, o: ShapeOpt, seed = 0): THREE.Gro
       break
     }
     case 'carriere': {
-      f.sol(3.4, 3.4, 0xa39e92)
-      f.box(3.2, 2.0, 1.4, MURS.pierre, 0, 0, -1.0)
-      f.box(3.2, 1.0, 1.0, 0xb9b4a9, 0, 0, 0.2)
-      for (const [x, z] of [[-1, 1.2], [-0.3, 1.3], [0.9, 1.1]]) f.box(0.55, 0.45, 0.4, 0xc4bfb4, x, 0, z)
-      f.box(0.1, 2.6, 0.1, 0x7c5533, 1.3, 0, 0.9); f.box(1.0, 0.1, 0.1, 0x7c5533, 0.85, 2.5, 0.9)
+      // front de taille creusé dans le flanc de la montagne (qui s'élève juste derrière, voir scene.ts) :
+      // des gradins de pierre fraîchement taillée, plus clairs que la roche, qui montent dans la pente
+      // chaque gradin recule comme la pente de la montagne : ils dépassent tous d'une même petite banquette
+      for (let k = 0; k < 5; k++) {
+        const front = -0.3 * k, larg = 3.6 - 0.25 * k
+        f.box(larg, 1.0, 2.2, k % 2 ? 0xa9a397 : 0xbab5aa, 0, k * 1.0, front - 1.1)
+        // arête du gradin, un peu plus sombre
+        f.box(larg, 0.08, 0.08, 0x8f897d, 0, k * 1.0 + 0.96, front - 0.04)
+      }
+      // carreau de la carrière : gravier, blocs taillés, échelle et chèvre de levage
+      const carreau = f.box(3.8, 0.04, 2.2, 0xa39e92, 0, 0, 1.4); carreau.castShadow = false
+      for (const [x, z, r] of [[-1.2, 1.3, 0.1], [-0.4, 1.7, -0.2], [0.9, 1.4, 0.3], [-1.0, 2.0, 0.5]]) f.box(0.55, 0.42, 0.4, 0xc9c4b9, x, 0, z).rotation.y = r
+      f.box(0.6, 0.4, 0.4, 0xc9c4b9, -1.1, 0.42, 1.3)
+      for (const s of [-1, 1]) f.box(0.05, 2.1, 0.05, 0x7c5533, 1.45 + s * 0.16, 0, 0.42).rotation.x = -0.12
+      for (let y = 0.25; y < 2.0; y += 0.3) f.box(0.36, 0.04, 0.04, 0x7c5533, 1.45, y, 0.42 + y * 0.12)
+      f.box(0.1, 2.8, 0.1, 0x7c5533, 0.4, 0, 1.0); f.box(1.2, 0.1, 0.1, 0x7c5533, 0.85, 2.7, 1.0)
+      f.box(0.02, 1.2, 0.02, 0x3a3a3a, 1.4, 1.5, 1.0); f.box(0.4, 0.3, 0.3, 0xc9c4b9, 1.4, 1.2, 1.0)
       break
     }
     case 'place': {

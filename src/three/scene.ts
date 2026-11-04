@@ -269,24 +269,40 @@ export class VillageScene {
     // mines et carrières font partie de la montagne : l'entrée (ou le front de taille) est tournée vers la vallée,
     // posée au niveau du sol, et une vraie montagne s'élève juste derrière, son pied collé à l'entrée
     this.conesVillage = []
-    const dansRoche = (g: THREE.Object3D, id: string, x: number, z: number, e: number, graine: number) => {
-      const [dx, dz] = versVallee(x, z)
-      g.rotation.y = Math.atan2(dx, dz)
-      g.position.set(x, hauteurSol(x + dx * 2.3 * e, z + dz * 2.3 * e) - 0.05, z)
-      const alea = (k: number) => { const v = Math.sin((graine * 37 + k) * 91.17) * 43758.5453; return v - Math.floor(v) }
-      // pied de la montagne : juste derrière l'encadrement de la mine, ou contre le fond de la carrière
-      const pied = (BI[id]?.shape === 'mine' ? 1.2 : -1.3) * e
-      const r = 13 + alea(1) * 5, sommetH = 46 + alea(2) * 20
-      const mx = x + dx * (pied - r), mz = z + dz * (pied - r)
+    const montagne = (mx: number, mz: number, r: number, sommetH: number, rot: number) => {
+      // base au point le plus bas du sol sous la montagne, sommet à sommetH au-dessus du sol en son centre
       let y = hauteurSol(mx, mz) - 2
       for (let a = 0; a < 12; a++) y = Math.min(y, hauteurSol(mx + Math.cos(a * Math.PI / 6) * r, mz + Math.sin(a * Math.PI / 6) * r) - 1.5)
-      const h = sommetH + hauteurSol(mx, mz) - y, seg = 7, rot = Math.atan2(dx, dz) + Math.PI / seg
+      const h = sommetH + hauteurSol(mx, mz) - y, seg = 7
       const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), matMont)
       m.position.set(mx, y + h / 2, mz); m.rotation.y = rot; m.castShadow = true; m.receiveShadow = true
       const kN = 0.3, n = new THREE.Mesh(new THREE.ConeGeometry(r * kN * 1.02, h * kN, seg), matNeigeMont)
       n.position.set(mx, y + h - (h * kN) / 2 + 0.05, mz); n.rotation.y = rot
       this.groupeBat.add(m, n)
       this.conesVillage.push({ x: mx, z: mz, r, y, h })
+    }
+    const dansRoche = (g: THREE.Object3D, id: string, x: number, z: number, e: number, graine: number) => {
+      const [dx, dz] = versVallee(x, z)
+      g.rotation.y = Math.atan2(dx, dz)
+      g.position.set(x, hauteurSol(x + dx * 2.3 * e, z + dz * 2.3 * e) - 0.05, z)
+      const alea = (k: number) => { const v = Math.sin((graine * 37 + k) * 91.17) * 43758.5453; return v - Math.floor(v) }
+      // repère de la mine : vers la vallée (dx, dz), et sur le côté (dz, −dx)
+      const pt = (lat: number, avant: number): [number, number] => [x + dz * lat + dx * avant, z - dx * lat + dz * avant]
+      const rot = Math.atan2(dx, dz) + Math.PI / 7
+      const r = 13 + alea(1) * 5, haut = 46 + alea(2) * 20
+      if (BI[id]?.shape === 'mine') {
+        // la montagne commence juste derrière l'encadrement : l'entrée s'ouvre dans son flanc
+        montagne(...pt(0, 1.2 * e - r), r, haut, rot)
+      } else {
+        // carrière : une entaille dans la montagne ; les gradins de taille au fond, la montagne derrière,
+        // deux épaulements rocheux de part et d'autre qui cachent les côtés des gradins
+        // pente fixe (rayon / hauteur ≈ 0,27), la même que le recul des gradins
+        const rc = 14 + alea(5) * 2
+        // (une face plane du cône regarde la carrière : elle est en retrait du cercle de base, d'où l'avancée)
+        montagne(...pt(0, 0.6 * e - rc), rc, rc / 0.27, rot)
+        const rs = 8 + alea(3) * 2
+        for (const sens of [-1, 1]) montagne(...pt(sens * (1.8 * e + rs * 0.6), -1.4 * e), rs, 30 + alea(4 + sens) * 10, rot + sens)
+      }
     }
     parcelles.forEach(({ id, i, b, c, sc }) => {
       // les petits bâtiments partagent la case (4 maisons, 2 échoppes) : décalés et un peu plus petits
