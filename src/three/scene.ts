@@ -641,8 +641,14 @@ export class VillageScene {
       const x = gx + (alea(k) - 0.5) * pasM, z = gz + (alea(k + 900) - 0.5) * pasM
       const d = horsVallee(versCase(x, z))
       if (d < 1.6 || (d > 14 && alea(k + 55) < 0.55)) continue
-      const r = 16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9, h = 42 + alea(k + 13) * 46 + Math.min(d, 10) * 3
-      const seg = 6 + Math.floor(alea(k + 3) * 3), rot = alea(k + 21) * Math.PI, y = hauteurSol(x, z, d) - 4
+      const r = 16 + alea(k + 7) * 18 + Math.min(d, 10) * 0.9
+      // la base descend jusqu'au point le plus bas du sol sous la montagne (côté vallée, la pente
+      // est bien plus basse qu'au centre) : rien ne flotte ; le sommet garde sa hauteur
+      let y = hauteurSol(x, z, d) - 4
+      const sommet = y + 42 + alea(k + 13) * 46 + Math.min(d, 10) * 3
+      for (let a = 0; a < 12; a++) for (const f of [0.55, 1]) y = Math.min(y, hauteurSol(x + Math.cos(a * Math.PI / 6) * r * f, z + Math.sin(a * Math.PI / 6) * r * f) - 1.5)
+      const h = sommet - y
+      const seg = 6 + Math.floor(alea(k + 3) * 3), rot = alea(k + 21) * Math.PI
       this.cones.push({ x, z, r, y, h })
       const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), k % 2 ? matRoche : matRoche2)
       m.position.set(x, y + h / 2, z); m.rotation.y = rot
