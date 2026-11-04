@@ -45,7 +45,8 @@ export function groupeDe(id: string): { g: string; cap: number } | null {
 }
 /** position dans la case (en fraction de case) et échelle d'un bâtiment qui la partage */
 export function sousCase(s: number, cap: number): { dx: number; dz: number; echelle: number } {
-  if (cap >= 4) return { dx: s % 2 ? 0.24 : -0.24, dz: s < 2 ? -0.24 : 0.24, echelle: 0.56 }
+  // les maisons gardent des portes à la taille des personnages, sans déborder sur les rues autour de la case
+  if (cap >= 4) return { dx: s % 2 ? 0.24 : -0.24, dz: s < 2 ? -0.24 : 0.24, echelle: 0.68 }
   if (cap === 2) return { dx: s ? 0.24 : -0.24, dz: 0, echelle: 0.7 }
   return { dx: 0, dz: 0, echelle: 1 }
 }

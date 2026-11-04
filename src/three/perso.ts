@@ -1,8 +1,12 @@
 import * as THREE from 'three'
 import { mat, fonce } from './batiments'
 
-/* Petit personnage médiéval pour la balade (unités : mètres, regard vers +z).
+/* Petit personnage médiéval pour la balade (modelé en mètres, regard vers +z).
    Son apparence vient d'une « tenue » (Skin) : couleurs, coiffure, armure, accessoires. */
+
+/** Le personnage est réduit à l'échelle des bâtiments du village (portes de 1,4 à 2 m) :
+ * modelé à 2,1 m de haut avec sa coiffure, il en mesure environ 1,5 dans la scène. */
+export const TAILLE_PERSO = 0.7
 
 const TUNIQUES = [0xb3352b, 0x3f5f80, 0x4f6b45, 0xd4a02a, 0x7a3a8a, 0xc0703a, 0x2f6f6f, 0x8a6a48]
 
@@ -113,8 +117,9 @@ function etiquette(texte: string) {
   const t = new THREE.CanvasTexture(c)
   t.colorSpace = THREE.SRGBColorSpace
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false }))
-  s.scale.set(1.4, 0.35, 1)
-  s.position.y = 2.35
+  // l'étiquette garde sa taille à l'écran : on compense la réduction du personnage
+  s.scale.set(1.4 / TAILLE_PERSO, 0.35 / TAILLE_PERSO, 1)
+  s.position.y = 2.5
   return s
 }
 
@@ -122,6 +127,7 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
   const sk = skinDe(skinId)
   const tunique = sk.tunique ?? couleurJoueur
   const g = new THREE.Group()
+  g.scale.setScalar(TAILLE_PERSO)
   const corps = new THREE.Group()
   g.add(corps)
   const m = (geo: THREE.BufferGeometry, c: number | THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = corps) => {
@@ -326,6 +332,8 @@ export function construirePerso(skinId: string, couleurJoueur: number, pseudo?: 
 
 /** Balancement des membres selon la vitesse (m/s), volutes de l'aura. */
 export function animerPerso(p: Perso, dt: number, vitesse: number) {
+  // jambes plus courtes que le modèle : les pas sont plus rapides pour la même vitesse
+  vitesse /= TAILLE_PERSO
   const marche = Math.min(1, vitesse / 3)
   if (vitesse > 0.15) p.phase += dt * (5 + vitesse * 1.2)
   else p.phase *= Math.max(0, 1 - dt * 6)

@@ -8,7 +8,7 @@ import type { Saison } from '../logic/calendrier'
 import { cleCase, sousCase, dansLaRoche, type Case, type Plan } from '../logic/plan'
 import { PALISSADES, ROUTE_PLAINES, ROUTE_NORD, LARGEUR_RIVIERE, CHAMPS, MONTAGNES, ESPACEMENT, horsVallee, casePiedMont, montagneContre, distLigne, dansPolygone, type P } from '../logic/carte'
 import { ajouterLigne, fusionLignes, ruban, construirePont, croiserRiviere, passagesRiviere, distRiviereLisse, hauteurSol, versVallee, adoucir, COURS, S, TAILLE_SOL, CARREAUX_SOL } from './terrain'
-import { construirePerso, animerPerso, libererPerso, couleurDe, type Perso } from './perso'
+import { construirePerso, animerPerso, libererPerso, couleurDe, TAILLE_PERSO, type Perso } from './perso'
 
 export type Mode = 'maquette' | 'balade'
 /** Position diffusée aux autres joueurs pendant la balade. */
@@ -142,6 +142,29 @@ function hauteurCone(c: Cone, x: number, z: number) {
   const t = psi - (c.rot + (i + 0.5) * pas)
   return c.y + c.h * (1 - d * Math.cos(t) / (c.r * Math.cos(Math.PI / c.seg)))
 }
+/** montagnes rangées par carrés de CARRE unités (avec une marge autour), pour trouver vite celles qui couvrent un point */
+const CARRE = 32, MARGE_GRILLE = 4
+let GRILLE: Map<string, Cone[]> | null = null
+function conesPres(x: number, z: number): Cone[] {
+  if (!GRILLE) {
+    const g = new Map<string, Cone[]>()
+    for (const c of cones()) {
+      const r = c.r + MARGE_GRILLE
+      for (let i = Math.floor((c.x - r) / CARRE); i <= Math.floor((c.x + r) / CARRE); i++)
+        for (let j = Math.floor((c.z - r) / CARRE); j <= Math.floor((c.z + r) / CARRE); j++) {
+          const k = i + ',' + j
+          ;(g.get(k) ?? g.set(k, []).get(k)!).push(c)
+        }
+    }
+    GRILLE = g
+  }
+  return GRILLE.get(Math.floor(x / CARRE) + ',' + Math.floor(z / CARRE)) ?? []
+}
+/** Le point (x, z), au sol à la hauteur y, est-il dans une montagne ou à moins de marge (≤ MARGE_GRILLE) de son flanc ?
+ * (cercle passant par les arêtes du cône, un peu plus large que ses faces : c'est prudent) */
+function contreRoche(x: number, z: number, y: number, marge = 0) {
+  return conesPres(x, z).some(c => Math.hypot(x - c.x, z - c.z) < c.r * (1 - (y - c.y) / c.h) + marge)
+}
 /** flanc de la montagne contre laquelle le plan a mis la case de (x, z) (carte.ts, montagneContre), ou null */
 function flancContre(x: number, z: number) {
   const m = montagneContre([Math.round(x / S), Math.round(z / S)])
@@ -149,7 +172,7 @@ function flancContre(x: number, z: number) {
   return c ? { ...flanc(c, x, z), c } : null
 }
 
-const HAUTEUR_YEUX = 1.7
+const HAUTEUR_YEUX = 1.7 * TAILLE_PERSO
 /* Niveaux de graphismes. budget : pixels dessinés au plus (au-delà l'image est légèrement agrandie) ;
    ombres : taille de la carte d'ombres (0 = sans ombres) et intervalle entre deux mises à jour. */
 export type Graphismes = 'auto' | 'haute' | 'moyenne' | 'basse'
@@ -667,15 +690,23 @@ export class VillageScene {
     for (const t of sentiers) this.groupeBat.add(ruban(t, LT, matTerre, 0.008, true))
 
     // ── ponts là où une rue, un chemin ou une route franchit la rivière ──
-    const traversees: { x: number; z: number; angle: number; large: number }[] = []
-    for (const { horizontal, pos, a, b } of fusionLignes(pave)) for (const t of croiserRiviere(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b]))
-      traversees.push({ ...t, angle: horizontal ? 0 : Math.PI / 2, large: LARGEUR + 0.6 })
-    for (const t of sentiers) for (let k = 1; k < t.length; k++) for (const c of croiserRiviere(t[k - 1], t[k]))
-      traversees.push({ ...c, angle: Math.atan2(t[k][1] - t[k - 1][1], t[k][0] - t[k - 1][0]), large: LT + 0.5 })
-    for (const r of routes) for (let k = 1; k < r.length; k++) for (const t of croiserRiviere(r[k - 1], r[k]))
-      traversees.push({ ...t, angle: Math.atan2(r[k][1] - r[k - 1][1], r[k][0] - r[k - 1][0]), large: 2.8 })
-    for (const t of traversees) {
-      const g = construirePont(LARGEUR_RIVIERE * S + 2.6, t.large)
+    // franc : sinus de l'angle avec le courant (1 : tout droit en travers de l'eau)
+    const traversees: { x: number; z: number; angle: number; large: number; franc: number; rue: boolean }[] = []
+    const traverser = (a: [number, number], b: [number, number], large: number, rue = false) => {
+      const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / l, uz = (b[1] - a[1]) / l
+      for (const c of croiserRiviere(a, b)) traversees.push({ x: c.x, z: c.z, angle: Math.atan2(uz, ux), large, franc: Math.abs(ux * c.rz - uz * c.rx), rue })
+    }
+    for (const { horizontal, pos, a, b } of fusionLignes(pave)) traverser(horizontal ? [a, pos] : [pos, a], horizontal ? [b, pos] : [pos, b], LARGEUR + 0.6, true)
+    for (const t of sentiers) for (let k = 1; k < t.length; k++) traverser(t[k - 1], t[k], LT + 0.5)
+    for (const r of routes) for (let k = 1; k < r.length; k++) traverser(r[k - 1], r[k], 2.8)
+    // une rue de la grille qui longe la rivière ne la franchit pas : elle s'arrête au bord de l'eau ;
+    // deux passages tout proches (un carrefour au bord de l'eau) n'ont qu'un pont, le plus en travers
+    const ponts: typeof traversees = []
+    for (const t of traversees.filter(t => !t.rue || t.franc > 0.6).sort((a, b) => b.franc - a.franc))
+      if (!ponts.some(o => Math.hypot(o.x - t.x, o.z - t.z) < 7)) ponts.push(t)
+    for (const t of ponts) {
+      // en biais, le pont s'allonge pour enjamber les deux berges
+      const g = construirePont((LARGEUR_RIVIERE * S + 1.4) / Math.max(t.franc, 0.45) + 1.2, t.large)
       g.position.set(t.x, 0, t.z); g.rotation.y = -t.angle
       this.groupeBat.add(g)
     }
@@ -909,7 +940,7 @@ export class VillageScene {
       this.groupeDecor.add(m, n)
     }
 
-    // forêt (instanciée) : sur les pentes de la vallée, et quelques bosquets dans les plaines
+    // forêt (instanciée) : au pied des montagnes, et quelques bosquets dans les plaines
     const avecForet = empl.includes('F')
     const nbArbres = avecForet ? 1000 : 500
     const tronc = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.24, 1.2, 5), new THREE.MeshStandardMaterial({ color: 0x5a3d26, flatShading: true }), nbArbres)
@@ -917,15 +948,17 @@ export class VillageScene {
     const haut = new THREE.InstancedMesh(new THREE.ConeGeometry(1.15, 2.4, 6), new THREE.MeshStandardMaterial({ color: 0x3a6f4f, flatShading: true }), nbArbres)
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3()
     let placés = 0
-    for (let k = 0; placés < nbArbres && k < nbArbres * 8; k++) {
+    for (let k = 0; placés < nbArbres && k < nbArbres * 12; k++) {
       const x = (alea(k * 3 + 1) - 0.5) * 420 * ESPACEMENT, z = (alea(k * 3 + 2) - 0.5) * 420 * ESPACEMENT
       const cs = versCase(x, z), d = horsVallee(cs)
-      // au pied des pentes et sur le bas des versants, là où l'on ne construit pas
+      // en lisière, au bas des pentes, là où l'on ne construit pas
       // (pas devant l'entrée des mines et carrières, au pied des pentes)
-      const pente = d > -0.5 && d < 3 && !casePiedMont([Math.round(cs[0]), Math.round(cs[1])])
+      const pente = d > -0.5 && d < 1.5 && !casePiedMont([Math.round(cs[0]), Math.round(cs[1])])
       const bosquet = d < -1.5 && Math.hypot(cs[0], cs[1]) > 17 && !dansPolygone(cs, CHAMPS) && alea(k + 77) < 0.18
       if ((!pente && !bosquet) || degage(x, z) || distRiviereLisse(x, z) < 5) continue
       const s = 0.8 + alea(k * 3 + 3) * 0.8, yh = hauteurSol(x, z, d)
+      // jamais dans la roche ni planté contre son flanc : tout le feuillage (rayon 1,6 × s) reste dehors
+      if (contreRoche(x, z, yh, 1.7 * s)) continue
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), alea(k) * 6)
       sc.set(s, s, s)
       p.set(x, yh + 0.6 * s, z); m4.compose(p, q, sc); tronc.setMatrixAt(placés, m4)
@@ -943,11 +976,14 @@ export class VillageScene {
 
     // rochers épars au pied des montagnes
     const matRoc = new THREE.MeshStandardMaterial({ color: 0x8a8579, flatShading: true, roughness: 1 })
-    for (let k = 0, n = 0; n < 50 && k < 400; k++) {
+    for (let k = 0, n = 0; n < 50 && k < 1500; k++) {
       const x = (alea(k + 300) - 0.5) * 360 * ESPACEMENT, z = (alea(k + 400) - 0.5) * 360 * ESPACEMENT, d = horsVallee(versCase(x, z))
       if (d < 0.3 || d > 5 || degage(x, z)) continue
+      // (un rocher caché dans une montagne ne sert à rien ; contre son flanc, il est éboulé)
+      const y = hauteurSol(x, z, d)
+      if (contreRoche(x, z, y)) continue
       const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5 + alea(k + 500) * 1.4, 0), matRoc)
-      r.position.set(x, hauteurSol(x, z, d) + 0.2, z)
+      r.position.set(x, y + 0.2, z)
       r.rotation.set(alea(k) * 3, alea(k + 1) * 3, 0)
       r.castShadow = true; r.receiveShadow = true
       this.groupeDecor.add(r)
@@ -1059,13 +1095,13 @@ export class VillageScene {
       c.rotation.set(this.pitch, this.yaw, 0)
       return
     }
-    const tete = new THREE.Vector3(p.x, 1.6, p.z)
+    const tete = new THREE.Vector3(p.x, 1.6 * TAILLE_PERSO, p.z)
     const elev = THREE.MathUtils.clamp(0.3 - this.pitch, 0.05, 1.3)
     const dir = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(elev), Math.sin(elev), Math.cos(this.yaw) * Math.cos(elev))
     // la caméra se rapproche si un bâtiment se trouve entre elle et le personnage
-    let dist = 4.2
+    let dist = 4.2 * TAILLE_PERSO + 0.6
     const ray = new THREE.Ray(tete, dir), pt = new THREE.Vector3()
-    for (const b of this.boites) if (ray.intersectBox(b, pt)) dist = Math.min(dist, Math.max(0.9, pt.distanceTo(tete) - 0.3))
+    for (const b of this.boites) if (ray.intersectBox(b, pt)) dist = Math.min(dist, Math.max(0.7, pt.distanceTo(tete) - 0.3))
     c.position.copy(tete).addScaledVector(dir, dist)
     c.lookAt(tete.x, tete.y + 0.15, tete.z)
   }
@@ -1364,7 +1400,7 @@ export class VillageScene {
       p.z += (fz * av + rz * dr) * vit
       this.pas += vit * 2.2
       for (const c of this.collisions) {
-        const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz), min = c.r + 0.35
+        const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz), min = c.r + 0.35 * TAILLE_PERSO
         if (d < min && d > 0.0001) { p.x = c.x + dx / d * min; p.z = c.z + dz / d * min }
       }
       // on reste au fond de la vallée et dans les plaines : les montagnes ne se gravissent pas

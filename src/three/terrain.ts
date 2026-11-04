@@ -31,12 +31,14 @@ function intersection([ax, az]: [number, number], [bx, bz]: [number, number], [c
   const t = ((cx - ax) * s[1] - (cz - az) * s[0]) / den, u = ((cx - ax) * r[1] - (cz - az) * r[0]) / den
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? { x: ax + t * r[0], z: az + t * r[1] } : null
 }
-/** endroits où le segment a → b franchit la rivière */
+/** endroits où le segment a → b franchit la rivière ; rx, rz : sens du courant à cet endroit */
 export function croiserRiviere(a: [number, number], b: [number, number]) {
-  const out: { x: number; z: number }[] = []
+  const out: { x: number; z: number; rx: number; rz: number }[] = []
   for (const c of COURS) for (let i = 1; i < c.length; i++) {
     const p = intersection(a, b, c[i - 1], c[i])
-    if (p && !out.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 4)) out.push(p)
+    if (!p || out.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 4)) continue
+    const dx = c[i][0] - c[i - 1][0], dz = c[i][1] - c[i - 1][1], l = Math.hypot(dx, dz) || 1
+    out.push({ ...p, rx: dx / l, rz: dz / l })
   }
   return out
 }
